@@ -1072,6 +1072,18 @@ function handleServerMessage(msg) {
       break;
     }
 
+    case 'chat_started': {
+      // Someone opened a chat with us — add them to our chat list
+      const fromId = String(msg.fromId || '');
+      if (!fromId || !isValidId(fromId)) return;
+      if (!chats[fromId]) {
+        chats[fromId] = { messages: [], unread: 0, online: Boolean(msg.online) };
+        renderChatList();
+        showNotification(fromId, '✦ Новый чат');
+      }
+      break;
+    }
+
     case 'error':
       showToast(String(msg.error || 'Ошибка'));
       break;
@@ -1205,6 +1217,11 @@ async function openChat(contactId) {
     if (chats[contactId]) chats[contactId].online = data.online || false;
     updateChatHeader(contactId);
   } catch {}
+
+  // Notify recipient that we opened a chat with them (so it appears in their list)
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'start_chat', to: contactId }));
+  }
 }
 
 function updateChatHeader(contactId) {
