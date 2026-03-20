@@ -1145,12 +1145,50 @@ async function initApp() {
   myName = loadName();
   document.getElementById('sidebar-my-id').textContent = myId;
   updateMyNameBar();
-  renderChatList();
   showScreen('screen-app');
+
+  // Restore contacts & chat list from server before connecting WS
+  await loadContactsFromServer();
+
+  renderChatList();
   connectWS();
-  // Request notification permission after short delay (less jarring)
+
+  // Request notification permission after short delay
   const notifDismissed = (() => { try { return localStorage.getItem('nxmsg_notif_dismissed'); } catch { return null; } })();
   if (!notifDismissed) setTimeout(checkNotifPermission, 1500);
+}
+
+// Load all known contacts from server (persisted)
+async function loadContactsFromServer() {
+  try {
+    const res = await fetch('/api/contacts/' + encodeURIComponent(myId));
+    if (!res.ok) return;
+    const contacts = await res.json();
+    for (const c of contacts) {
+      if (!chats[c.contactId]) {
+        chats[c.contactId] = {
+          messages: [],   // messages loaded lazily when chat is opened
+          unread: 0,
+          online: false,
+          name: c.displayName || ''
+        };
+      } else {
+        // Update name if we have it
+        if (c.displayName) chats[c.contactId].name = c.displayName;
+      }
+      if (c.displayName) contactNames[c.contactId] = c.displayName;
+      // Store last message preview so sidebar shows it without fetching full history
+      if (c.lastText && chats[c.contactId].messages.length === 0) {
+        chats[c.contactId]._lastPreview = {
+          text: c.lastText,
+          timestamp: c.lastTimestamp,
+          mine: c.lastFrom === myId
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('Could not load contacts:', e);
+  }
 }
 
 function updateMyNameBar() {
@@ -1316,19 +1354,19 @@ function renderChatList() {
     return;
   }
 
-  // Sort by last message time
+  // Sort by last message time (use _lastPreview if messages not loaded yet)
   ids.sort((a, b) => {
-    const ma = chats[a].messages;
-    const mb = chats[b].messages;
-    const ta = ma.length ? ma[ma.length - 1].timestamp : 0;
-    const tb = mb.length ? mb[mb.length - 1].timestamp : 0;
+    const ca = chats[a], cb = chats[b];
+    const ta = ca.messages.length ? ca.messages[ca.messages.length - 1].timestamp : (ca._lastPreview ? ca._lastPreview.timestamp : 0);
+    const tb = cb.messages.length ? cb.messages[cb.messages.length - 1].timestamp : (cb._lastPreview ? cb._lastPreview.timestamp : 0);
     return tb - ta;
   });
 
   list.innerHTML = '';
   ids.forEach(contactId => {
     const chat = chats[contactId];
-    const last = chat.messages[chat.messages.length - 1];
+    const last = chat.messages.length > 0 ? chat.messages[chat.messages.length - 1] : null;
+    const preview = last || chat._lastPreview || null;
 
     const item = document.createElement('div');
     item.className = 'chat-item' + (activeChat === contactId ? ' active' : '');
@@ -1360,7 +1398,7 @@ function renderChatList() {
     const lastEl = document.createElement('div');
     lastEl.className = 'chat-last';
     // All text content, never innerHTML
-    lastEl.textContent = last ? (last.mine ? '▶ ' + last.text : last.text) : '';
+    lastEl.textContent = preview ? (preview.mine ? '▶ ' + preview.text : preview.text) : '';
 
     info.appendChild(nameEl);
     info.appendChild(idEl);
@@ -1372,7 +1410,7 @@ function renderChatList() {
 
     const timeEl = document.createElement('div');
     timeEl.className = 'chat-time';
-    timeEl.textContent = last ? formatTime(last.timestamp) : '';
+    timeEl.textContent = preview ? formatTime(preview.timestamp) : '';
     meta.appendChild(timeEl);
 
     if (chat.unread > 0) {
@@ -1524,18 +1562,51 @@ async function startNewChat() {
 }
 
 // ─── QR CODE ───────────────────────────────────────────
-function showMyQR() {
-  const canvas = document.getElementById('qr-canvas');
-  const textEl = document.getElementById('qr-id-text');
-  textEl.textContent = myId; // safe
-
-  QRCode.toCanvas(canvas, myId, {
-    width: 200,
-    color: { dark: '#FF5C00', light: '#111111' },
-    errorCorrectionLevel: 'H'
-  });
-
+async function showMyQR() {
   openModal('modal-qr');
+
+  const textEl = document.getElementById('qr-id-text');
+  textEl.textContent = myId;
+
+  const canvas = document.getElementById('qr-canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  try {
+    await QRCode.toCanvas(canvas, myId, {
+      width: 200,
+      margin: 2,
+      color: { dark: '#FF5C00', light: '#111111' },
+      errorCorrectionLevel: 'M'
+    });
+  } catch (e) {
+    try {
+      const url = await QRCode.toDataURL(myId, {
+        width: 200,
+        margin: 2,
+        color: { dark: '#FF5C00', light: '#111111' },
+        errorCorrectionLevel: 'M'
+      });
+      canvas.width = 200;
+      canvas.height = 200;
+      const img = new Image();
+      img.onload = () => ctx.drawImage(img, 0, 0);
+      img.src = url;
+    } catch (e2) {
+      canvas.width = 200;
+      canvas.height = 200;
+      ctx.fillStyle = '#111111';
+      ctx.fillRect(0, 0, 200, 200);
+      ctx.fillStyle = '#FF5C00';
+      ctx.font = '11px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('ID:', 100, 80);
+      ctx.font = 'bold 10px monospace';
+      const half = Math.ceil(myId.length / 2);
+      ctx.fillText(myId.slice(0, half), 100, 105);
+      ctx.fillText(myId.slice(half), 100, 125);
+    }
+  }
 }
 
 // ─── QR SCAN ───────────────────────────────────────────
