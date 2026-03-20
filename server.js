@@ -209,11 +209,22 @@ wss.on('connection', (ws) => {
         };
 
         const convKey = getConvKey(authenticatedUserId, toId);
+        const isFirstMessage = !messages.has(convKey) || messages.get(convKey).length === 0;
         if (!messages.has(convKey)) messages.set(convKey, []);
         messages.get(convKey).push(msgObj);
 
         // Deliver to recipient if online
         const recipientWs = wsClients.get(toId);
+
+        // If this is the very first message — notify recipient that a new chat was started
+        if (isFirstMessage && recipientWs && recipientWs.readyState === WebSocket.OPEN) {
+          recipientWs.send(JSON.stringify({
+            type: 'chat_started',
+            fromId: authenticatedUserId,
+            online: true
+          }));
+        }
+
         const deliveryPayload = {
           type: 'new_message',
           id: msgObj.id,
@@ -234,6 +245,29 @@ wss.on('connection', (ws) => {
           text: safeText,
           timestamp: msgObj.timestamp
         }));
+        break;
+      }
+
+      // Notify recipient that someone opened a chat with them (no message yet)
+      case 'start_chat': {
+        if (!authenticatedUserId) return;
+        const toId = msg.to;
+        if (!isValidUserId(toId) || !users.has(toId)) return;
+
+        const convKey = getConvKey(authenticatedUserId, toId);
+        const alreadyHasMessages = messages.has(convKey) && messages.get(convKey).length > 0;
+
+        // Only notify if no prior conversation exists yet
+        if (!alreadyHasMessages) {
+          const recipientWs = wsClients.get(toId);
+          if (recipientWs && recipientWs.readyState === WebSocket.OPEN) {
+            recipientWs.send(JSON.stringify({
+              type: 'chat_started',
+              fromId: authenticatedUserId,
+              online: true
+            }));
+          }
+        }
         break;
       }
 
