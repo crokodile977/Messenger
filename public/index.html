@@ -6,7 +6,6 @@
 <title>NXMSG — Secure Messenger</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <style>
   :root {
     --bg:#0a0a0a; --bg2:#111; --bg3:#1a1a1a; --border:#222;
@@ -956,20 +955,107 @@ async function startNewChat() {
 }
 
 // ─── QR ──────────────────────────────────────────────
-async function showMyQR() {
+// Self-contained QR generator — no external library needed
+// Encodes uppercase alphanumeric strings (our 12-char codes) into QR Version 2-M
+
+function drawQR(canvas, text) {
+  const M = buildQRMatrix(text);
+  if (!M) return false;
+  const S = M.length, CELL = Math.floor(196 / S), OFF = Math.floor((200 - CELL*S) / 2);
+  canvas.width = 200; canvas.height = 200;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#111111'; ctx.fillRect(0,0,200,200);
+  for (let r=0;r<S;r++) for (let c=0;c<S;c++) {
+    ctx.fillStyle = M[r][c] ? '#FF5C00' : '#111111';
+    ctx.fillRect(OFF+c*CELL, OFF+r*CELL, CELL, CELL);
+  }
+  return true;
+}
+
+function buildQRMatrix(text) {
+  const ALPHA = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:';
+  if (![...text].every(c => ALPHA.includes(c)) || text.length > 25) return null;
+
+  // --- bit stream ---
+  const bits = [];
+  const push = (v,n) => { for(let i=n-1;i>=0;i--) bits.push((v>>i)&1); };
+  push(2,4); push(text.length,9); // alphanumeric mode, v2 char count
+  for(let i=0;i<text.length-1;i+=2) push(ALPHA.indexOf(text[i])*45+ALPHA.indexOf(text[i+1]),11);
+  if(text.length&1) push(ALPHA.indexOf(text[text.length-1]),6);
+  push(0,4); while(bits.length%8) bits.push(0);
+  const PAD=[0xEC,0x11]; while(bits.length<44*8){const p=PAD[(bits.length/8|0)%2];push(p,8);}
+
+  // bytes
+  const db=[]; for(let i=0;i<bits.length;i+=8) db.push(bits.slice(i,i+8).reduce((a,b,j)=>a|(b<<(7-j)),0));
+
+  // --- GF(256) Reed-Solomon (28 EC bytes for v2-M) ---
+  const EXP=new Uint8Array(512), LOG=new Uint8Array(256);
+  let x=1; for(let i=0;i<255;i++){EXP[i]=x;LOG[x]=i;x^=x<<1^(x&0x80?0x11D:0);}
+  for(let i=255;i<512;i++) EXP[i]=EXP[i-255];
+  const mul=(a,b)=>a&&b?EXP[LOG[a]+LOG[b]]:0;
+  let g=[1];
+  for(let i=0;i<28;i++){const t=[...g,0];for(let j=0;j<g.length;j++){t[j]^=mul(g[j],EXP[i]);t[j+1]^=mul(g[j],EXP[i]);}g=t;g.shift();}
+  const msg=[...db,...new Array(28).fill(0)];
+  for(let i=0;i<db.length;i++) if(msg[i]) for(let j=0;j<g.length;j++) msg[i+1+j]^=mul(g[j],msg[i]);
+  const all=[...db,...msg.slice(db.length)];
+
+  // --- 25×25 matrix ---
+  const N=25, m=Array.from({length:N},()=>new Array(N).fill(-1));
+  const fn=Array.from({length:N},()=>new Array(N).fill(false));
+  const sf=(r,c,v)=>{if(r>=0&&r<N&&c>=0&&c<N){m[r][c]=v?1:0;fn[r][c]=true;}};
+
+  // finder patterns + separators
+  const finder=(tr,tc)=>{
+    for(let r=-1;r<=7;r++) for(let c=-1;c<=7;c++) sf(tr+r,tc+c,
+      r>=0&&r<=6&&c>=0&&c<=6&&(r===0||r===6||c===0||c===6||(r>=2&&r<=4&&c>=2&&c<=4)));
+  };
+  finder(0,0); finder(0,18); finder(18,0);
+
+  // alignment pattern (v2: row 18, col 18)
+  for(let r=-2;r<=2;r++) for(let c=-2;c<=2;c++) sf(18+r,18+c,Math.abs(r)===2||Math.abs(c)===2||(!r&&!c));
+
+  // timing
+  for(let i=8;i<17;i++){sf(6,i,i%2===0);sf(i,6,i%2===0);}
+
+  // dark module
+  sf(N-8,8,1);
+
+  // format string (M level=01, mask=0 → bits after XOR with mask pattern 101010000010010)
+  const FMT=0b111010000010010;
+  const fp=[[0,8],[1,8],[2,8],[3,8],[4,8],[5,8],[7,8],[8,8],[8,7],[8,5],[8,4],[8,3],[8,2],[8,1],[8,0]];
+  const fp2=[[8,N-1],[8,N-2],[8,N-3],[8,N-4],[8,N-5],[8,N-6],[8,N-7],[N-8,8],[N-7,8],[N-6,8],[N-5,8],[N-4,8],[N-3,8],[N-2,8],[N-1,8]];
+  for(let i=0;i<15;i++){sf(fp[i][0],fp[i][1],(FMT>>i)&1);sf(fp2[i][0],fp2[i][1],(FMT>>i)&1);}
+
+  // data bits
+  const allBits=[]; all.forEach(b=>{for(let i=7;i>=0;i--)allBits.push((b>>i)&1);});
+  let bi=0;
+  for(let col=N-1;col>=0;col-=2){
+    if(col===6) col=5;
+    const up=(Math.floor((N-1-col)/2))%2===0;
+    for(let i=0;i<N;i++){
+      const row=up?N-1-i:i;
+      for(let dc=0;dc<2;dc++){
+        const c=col-dc;
+        if(!fn[row][c]&&bi<allBits.length){m[row][c]=allBits[bi]^(((row+c)%2===0)?1:0);bi++;}
+      }
+    }
+  }
+  return m.map(row=>row.map(v=>v===1));
+}
+
+function showMyQR() {
   openModal('modal-qr');
   document.getElementById('qr-code-text').textContent = myPublicCode;
   const canvas = document.getElementById('qr-canvas');
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  try {
-    await QRCode.toCanvas(canvas, myPublicCode, { width:200, margin:2, color:{ dark:'#FF5C00', light:'#111111' }, errorCorrectionLevel:'M' });
-  } catch {
-    try {
-      const url = await QRCode.toDataURL(myPublicCode, { width:200, margin:2, color:{ dark:'#FF5C00', light:'#111111' } });
-      canvas.width = 200; canvas.height = 200;
-      const img = new Image(); img.onload = () => ctx.drawImage(img,0,0); img.src = url;
-    } catch { canvas.width=200; canvas.height=200; ctx.fillStyle='#111'; ctx.fillRect(0,0,200,200); ctx.fillStyle='#FF5C00'; ctx.font='bold 14px monospace'; ctx.textAlign='center'; ctx.fillText(myPublicCode,100,105); }
+  const ok = drawQR(canvas, myPublicCode);
+  if (!ok) {
+    canvas.width=200; canvas.height=200;
+    const ctx=canvas.getContext('2d');
+    ctx.fillStyle='#111111'; ctx.fillRect(0,0,200,200);
+    ctx.fillStyle='#FF5C00'; ctx.font='bold 16px monospace';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(myPublicCode.slice(0,6),100,90);
+    ctx.fillText(myPublicCode.slice(6),100,115);
   }
 }
 
