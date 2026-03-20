@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const crypto = require('crypto');
+const bcrypt = require('bcrypt');
 const path = require('path');
 const fs = require('fs');
 
@@ -12,7 +13,6 @@ const wss = new WebSocket.Server({ server });
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Security headers
 app.use((req, res, next) => {
   res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:");
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -23,182 +23,287 @@ app.use((req, res, next) => {
 
 // ─── PERSISTENCE ────────────────────────────────────────
 const DATA_DIR = path.join(__dirname, 'data');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const USERS_FILE    = path.join(DATA_DIR, 'users.json');
 const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
+const PUBCODES_FILE = path.join(DATA_DIR, 'pubcodes.json');
 
-// Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// Load users from disk
-function loadUsers() {
+function loadJSON(file) {
   try {
-    if (fs.existsSync(USERS_FILE)) {
-      const raw = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-      return new Map(Object.entries(raw));
-    }
-  } catch (e) { console.error('Failed to load users:', e.message); }
-  return new Map();
+    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) { console.error('Load error', file, e.message); }
+  return {};
 }
 
-// Load messages from disk
-function loadMessages() {
-  try {
-    if (fs.existsSync(MESSAGES_FILE)) {
-      const raw = JSON.parse(fs.readFileSync(MESSAGES_FILE, 'utf8'));
-      return new Map(Object.entries(raw));
-    }
-  } catch (e) { console.error('Failed to load messages:', e.message); }
-  return new Map();
-}
-
-// Debounced save — coalesces rapid writes into one
-let saveUsersTimer = null;
-let saveMessagesTimer = null;
-
-function saveUsers() {
-  clearTimeout(saveUsersTimer);
-  saveUsersTimer = setTimeout(() => {
-    try {
-      const obj = Object.fromEntries(users);
-      fs.writeFileSync(USERS_FILE, JSON.stringify(obj), 'utf8');
-    } catch (e) { console.error('Failed to save users:', e.message); }
+function debounceWrite(file, getData, timers) {
+  clearTimeout(timers[file]);
+  timers[file] = setTimeout(() => {
+    try { fs.writeFileSync(file, JSON.stringify(getData()), 'utf8'); }
+    catch (e) { console.error('Write error', file, e.message); }
   }, 300);
 }
 
-function saveMessages() {
-  clearTimeout(saveMessagesTimer);
-  saveMessagesTimer = setTimeout(() => {
-    try {
-      const obj = Object.fromEntries(messages);
-      fs.writeFileSync(MESSAGES_FILE, JSON.stringify(obj), 'utf8');
-    } catch (e) { console.error('Failed to save messages:', e.message); }
-  }, 300);
-}
+const _timers = {};
+const saveUsers    = () => debounceWrite(USERS_FILE,    () => Object.fromEntries(users),    _timers);
+const saveMessages = () => debounceWrite(MESSAGES_FILE, () => Object.fromEntries(messages), _timers);
+const savePubcodes = () => debounceWrite(PUBCODES_FILE, () => Object.fromEntries(pubcodes), _timers);
 
-// In-memory stores — pre-loaded from disk
-const users = loadUsers();
-const messages = loadMessages();
-const wsClients = new Map();   // userId -> ws  (never persisted — runtime only)
+// In-memory stores
+// users    : userId  -> { id, passwordHash, displayName, registeredAt, publicCode }
+// pubcodes : publicCode -> userId   (reverse lookup)
+// messages : convKey -> [{ id, from, to, encrypted, timestamp }]
+const users    = new Map(Object.entries(loadJSON(USERS_FILE)));
+const pubcodes = new Map(Object.entries(loadJSON(PUBCODES_FILE)));
+const messages = new Map(Object.entries(loadJSON(MESSAGES_FILE)));
+const wsClients = new Map();   // userId -> ws  (runtime only)
+// Session tokens: token -> { userId, expiresAt }
+const sessions = new Map();
 
-console.log(`📂 Loaded ${users.size} users, ${messages.size} conversations from disk`);
+console.log(`📂 Loaded ${users.size} users, ${messages.size} conversations`);
 
-// ─── CRYPTO HELPERS ────────────────────────────────────
+// ─── HELPERS ────────────────────────────────────────────
 
+// Internal ID: ~20 chars, mixed case + specials — never shown to other users
 function generateUserId() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*-_+=~';
-  let id = '';
   const bytes = crypto.randomBytes(24);
-  for (let i = 0; i < 20; i++) {
-    id += chars[bytes[i] % chars.length];
-  }
+  let id = '';
+  for (let i = 0; i < 20; i++) id += chars[bytes[i] % chars.length];
   return id;
 }
 
-function encryptMessage(text, sharedSecret) {
-  const key = crypto.createHash('sha256').update(sharedSecret).digest();
-  const iv = crypto.randomBytes(16);
+// Public code: 12 alphanumeric chars — safe to share, shown in QR
+function generatePublicCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars
+  const bytes = crypto.randomBytes(16);
+  let code = '';
+  for (let i = 0; i < 12; i++) code += chars[bytes[i] % chars.length];
+  return code;
+}
+
+// Session token: 32 random hex bytes
+function generateSessionToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function getConvKey(a, b)             { return [a, b].sort().join('::'); }
+function getConversationSecret(a, b)  {
+  return crypto.createHmac('sha256', 'nxmsg-secret-2024').update([a, b].sort().join('|')).digest('hex');
+}
+
+function encryptMessage(text, secret) {
+  const key = crypto.createHash('sha256').update(secret).digest();
+  const iv  = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  const enc = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
-  return iv.toString('hex') + ':' + tag.toString('hex') + ':' + encrypted.toString('hex');
+  return iv.toString('hex') + ':' + tag.toString('hex') + ':' + enc.toString('hex');
 }
 
-function decryptMessage(encryptedData, sharedSecret) {
+function decryptMessage(data, secret) {
   try {
-    const parts = encryptedData.split(':');
-    if (parts.length !== 3) return null;
-    const [ivHex, tagHex, dataHex] = parts;
-    const key = crypto.createHash('sha256').update(sharedSecret).digest();
-    const iv = Buffer.from(ivHex, 'hex');
-    const tag = Buffer.from(tagHex, 'hex');
-    const data = Buffer.from(dataHex, 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-    decipher.setAuthTag(tag);
-    return decipher.update(data) + decipher.final('utf8');
-  } catch {
-    return null;
-  }
-}
-
-function getConversationSecret(id1, id2) {
-  const sorted = [id1, id2].sort().join('|');
-  return crypto.createHmac('sha256', 'messenger-secret-key-2024').update(sorted).digest('hex');
-}
-
-function getConvKey(id1, id2) {
-  return [id1, id2].sort().join('::');
+    const [ivH, tagH, dataH] = data.split(':');
+    const key = crypto.createHash('sha256').update(secret).digest();
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivH, 'hex'));
+    decipher.setAuthTag(Buffer.from(tagH, 'hex'));
+    return decipher.update(Buffer.from(dataH, 'hex')) + decipher.final('utf8');
+  } catch { return null; }
 }
 
 function sanitizeText(input) {
   if (typeof input !== 'string') return '';
   return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;')
-    .replace(/\//g, '&#x2F;')
-    .replace(/`/g, '&#x60;')
-    .replace(/=/g, '&#x3D;')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#x27;').replace(/\//g, '&#x2F;')
+    .replace(/`/g, '&#x60;').replace(/=/g, '&#x3D;')
     .slice(0, 4000);
 }
 
 function isValidUserId(id) {
-  if (typeof id !== 'string') return false;
-  if (id.length < 18 || id.length > 24) return false;
+  if (typeof id !== 'string' || id.length < 18 || id.length > 24) return false;
   return /^[A-Za-z0-9!@#$%^&*\-_+=~]+$/.test(id);
 }
 
-// ─── REST API ───────────────────────────────────────────
+function isValidPublicCode(code) {
+  if (typeof code !== 'string') return false;
+  return /^[A-Z0-9]{12}$/.test(code);
+}
 
-// Register new user
-app.post('/api/register', (req, res) => {
-  const userId = generateUserId();
-  users.set(userId, { id: userId, registeredAt: Date.now(), displayName: '' });
-  saveUsers();
-  res.json({ userId });
-});
+// Resolve a token to userId, return null if invalid/expired
+function resolveSession(token) {
+  if (typeof token !== 'string') return null;
+  const s = sessions.get(token);
+  if (!s) return null;
+  if (s.expiresAt < Date.now()) { sessions.delete(token); return null; }
+  return s.userId;
+}
 
-// Check if user exists
-app.get('/api/user/:id', (req, res) => {
-  const id = req.params.id;
-  if (!isValidUserId(id)) return res.status(400).json({ error: 'Invalid ID format' });
-  if (users.has(id)) {
-    const u = users.get(id);
-    res.json({ exists: true, online: wsClients.has(id), displayName: u.displayName || '' });
-  } else {
-    res.json({ exists: false });
+// Rate-limit store: ip -> { count, resetAt }
+const loginAttempts = new Map();
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const entry = loginAttempts.get(ip) || { count: 0, resetAt: now + 60000 };
+  if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + 60000; }
+  entry.count++;
+  loginAttempts.set(ip, entry);
+  return entry.count <= 10; // max 10 attempts per minute per IP
+}
+
+// ─── AUTH ENDPOINTS ─────────────────────────────────────
+
+// Register: { password, displayName? } -> { publicCode, token }
+app.post('/api/register', async (req, res) => {
+  const { password, displayName } = req.body;
+  if (typeof password !== 'string' || password.length < 6 || password.length > 128) {
+    return res.status(400).json({ error: 'Пароль должен быть от 6 до 128 символов' });
   }
+
+  const passwordHash = await bcrypt.hash(password, 12);
+  const userId = generateUserId();
+
+  // Ensure public code is unique
+  let publicCode;
+  do { publicCode = generatePublicCode(); } while (pubcodes.has(publicCode));
+
+  const safeName = typeof displayName === 'string'
+    ? displayName.replace(/[<>&"'`\/=]/g, '').trim().slice(0, 32)
+    : '';
+
+  users.set(userId, { id: userId, passwordHash, displayName: safeName, registeredAt: Date.now(), publicCode });
+  pubcodes.set(publicCode, userId);
+  saveUsers();
+  savePubcodes();
+
+  const token = generateSessionToken();
+  sessions.set(token, { userId, expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 }); // 30 days
+
+  res.json({ publicCode, token, displayName: safeName });
 });
 
-// Update display name
-app.patch('/api/user/:id/name', (req, res) => {
-  const id = req.params.id;
-  if (!isValidUserId(id)) return res.status(400).json({ error: 'Invalid ID format' });
-  if (!users.has(id)) return res.status(404).json({ error: 'User not found' });
+// Login: { publicCode, password } -> { token, displayName }
+app.post('/api/login', async (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress || 'unknown';
+  if (!checkRateLimit(ip)) {
+    return res.status(429).json({ error: 'Слишком много попыток входа. Подождите минуту.' });
+  }
+
+  const { publicCode, password } = req.body;
+  if (!isValidPublicCode(publicCode)) {
+    return res.status(400).json({ error: 'Неверный формат кода' });
+  }
+  if (typeof password !== 'string') {
+    return res.status(400).json({ error: 'Пароль не указан' });
+  }
+
+  const userId = pubcodes.get(publicCode);
+  if (!userId || !users.has(userId)) {
+    // Constant-time response to prevent user enumeration
+    await bcrypt.compare('dummy', '$2b$12$invalidhashpaddingtostoptimingatk');
+    return res.status(401).json({ error: 'Неверный код или пароль' });
+  }
+
+  const user = users.get(userId);
+  const match = await bcrypt.compare(password, user.passwordHash);
+  if (!match) {
+    return res.status(401).json({ error: 'Неверный код или пароль' });
+  }
+
+  const token = generateSessionToken();
+  sessions.set(token, { userId, expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 });
+
+  res.json({ token, displayName: user.displayName || '', publicCode });
+});
+
+// Validate existing session token -> { valid, displayName, publicCode }
+app.post('/api/session', (req, res) => {
+  const { token } = req.body;
+  const userId = resolveSession(token);
+  if (!userId || !users.has(userId)) return res.json({ valid: false });
+  const u = users.get(userId);
+  res.json({ valid: true, displayName: u.displayName || '', publicCode: u.publicCode });
+});
+
+// Lookup user by public code (for starting a chat) — returns exists + displayName only
+app.get('/api/user/bycode/:code', (req, res) => {
+  const code = req.params.code.toUpperCase();
+  if (!isValidPublicCode(code)) return res.status(400).json({ error: 'Invalid code' });
+  const userId = pubcodes.get(code);
+  if (!userId || !users.has(userId)) return res.json({ exists: false });
+  const u = users.get(userId);
+  res.json({ exists: true, online: wsClients.has(userId), displayName: u.displayName || '', publicCode: code });
+});
+
+// Update display name (authenticated)
+app.patch('/api/user/name', (req, res) => {
+  const userId = resolveSession(req.body.token);
+  if (!userId || !users.has(userId)) return res.status(401).json({ error: 'Unauthorized' });
   const { name } = req.body;
   if (typeof name !== 'string') return res.status(400).json({ error: 'Invalid name' });
   const safeName = name.replace(/[<>&"'`\/=]/g, '').trim().slice(0, 32);
-  users.get(id).displayName = safeName;
+  users.get(userId).displayName = safeName;
   saveUsers();
-  // Broadcast name change to online contacts
+  // Broadcast name change
   for (const [key] of messages) {
     const [a, b] = key.split('::');
-    const otherId = a === id ? b : b === id ? a : null;
-    if (!otherId) continue;
-    const otherWs = wsClients.get(otherId);
-    if (otherWs && otherWs.readyState === WebSocket.OPEN) {
-      otherWs.send(JSON.stringify({ type: 'name_changed', userId: id, displayName: safeName }));
+    const other = a === userId ? b : b === userId ? a : null;
+    if (!other) continue;
+    const ows = wsClients.get(other);
+    if (ows && ows.readyState === WebSocket.OPEN) {
+      ows.send(JSON.stringify({ type: 'name_changed', publicCode: users.get(userId).publicCode, displayName: safeName }));
     }
   }
   res.json({ ok: true, displayName: safeName });
 });
 
-// Get all contacts for a user (everyone they've had a conversation with)
-app.get('/api/contacts/:userId', (req, res) => {
-  const userId = req.params.userId;
-  if (!isValidUserId(userId)) return res.status(400).json({ error: 'Invalid ID format' });
-  if (!users.has(userId)) return res.status(404).json({ error: 'User not found' });
+// Upload / update avatar
+app.post('/api/user/avatar', (req, res) => {
+  const userId = resolveSession(req.body.token);
+  if (!userId || !users.has(userId)) return res.status(401).json({ error: 'Unauthorized' });
+  const { avatar } = req.body;
+  if (typeof avatar !== 'string') return res.status(400).json({ error: 'Invalid avatar' });
+  // Accept only data URLs with image MIME type — basic validation
+  if (!avatar.startsWith('data:image/')) return res.status(400).json({ error: 'Must be an image' });
+  // ~2 MB limit on base64 string (~2.7 MB raw) 
+  if (avatar.length > 3 * 1024 * 1024) return res.status(400).json({ error: 'Image too large (max 2 MB)' });
+  users.get(userId).avatar = avatar;
+  saveUsers();
+  // Notify contacts of avatar update
+  for (const [key] of messages) {
+    const [a, b] = key.split('::');
+    const other = a === userId ? b : b === userId ? a : null;
+    if (!other) continue;
+    const ows = wsClients.get(other);
+    if (ows?.readyState === WebSocket.OPEN) {
+      ows.send(JSON.stringify({ type: 'avatar_changed', publicCode: users.get(userId).publicCode }));
+    }
+  }
+  res.json({ ok: true });
+});
+
+// Delete avatar
+app.delete('/api/user/avatar', (req, res) => {
+  const userId = resolveSession(req.body.token);
+  if (!userId || !users.has(userId)) return res.status(401).json({ error: 'Unauthorized' });
+  delete users.get(userId).avatar;
+  saveUsers();
+  res.json({ ok: true });
+});
+
+// Get avatar by public code (public endpoint)
+app.get('/api/avatar/:code', (req, res) => {
+  const code = req.params.code.toUpperCase();
+  if (!isValidPublicCode(code)) return res.status(400).json({ error: 'Invalid code' });
+  const userId = pubcodes.get(code);
+  if (!userId || !users.has(userId)) return res.json({ avatar: null });
+  const u = users.get(userId);
+  res.json({ avatar: u.avatar || null });
+});
+
+// Get contacts for current user
+app.post('/api/contacts', (req, res) => {
+  const userId = resolveSession(req.body.token);
+  if (!userId || !users.has(userId)) return res.status(401).json({ error: 'Unauthorized' });
 
   const contacts = [];
   for (const [key, msgs] of messages) {
@@ -206,150 +311,117 @@ app.get('/api/contacts/:userId', (req, res) => {
     if (a !== userId && b !== userId) continue;
     const contactId = a === userId ? b : a;
     if (!users.has(contactId)) continue;
-
-    const contactUser = users.get(contactId);
-    const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+    const cu = users.get(contactId);
+    const lastMsg = msgs.length ? msgs[msgs.length - 1] : null;
     const secret = getConversationSecret(userId, contactId);
-    const lastText = lastMsg
-      ? (decryptMessage(lastMsg.encrypted, secret) || '')
-      : '';
-
+    const lastText = lastMsg ? (decryptMessage(lastMsg.encrypted, secret) || '') : '';
     contacts.push({
-      contactId,
-      displayName: contactUser.displayName || '',
+      publicCode: cu.publicCode,
+      displayName: cu.displayName || '',
       online: wsClients.has(contactId),
       lastTimestamp: lastMsg ? lastMsg.timestamp : 0,
       lastText,
-      lastFrom: lastMsg ? lastMsg.from : null,
+      lastFrom: lastMsg ? (lastMsg.from === userId ? 'me' : 'them') : null,
       messageCount: msgs.length
     });
   }
-
-  // Sort by last message time descending
   contacts.sort((a, b) => b.lastTimestamp - a.lastTimestamp);
   res.json(contacts);
 });
 
-// Get message history for a conversation
-app.get('/api/messages/:myId/:theirId', (req, res) => {
-  const { myId, theirId } = req.params;
-  if (!isValidUserId(myId) || !isValidUserId(theirId)) {
-    return res.status(400).json({ error: 'Invalid ID format' });
-  }
-  if (!users.has(myId) || !users.has(theirId)) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-  const key = getConvKey(myId, theirId);
-  const secret = getConversationSecret(myId, theirId);
+// Get message history (authenticated, by public code)
+app.post('/api/messages', (req, res) => {
+  const userId = resolveSession(req.body.token);
+  if (!userId || !users.has(userId)) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { contactCode } = req.body;
+  if (!isValidPublicCode(contactCode)) return res.status(400).json({ error: 'Invalid code' });
+  const contactId = pubcodes.get(contactCode);
+  if (!contactId || !users.has(contactId)) return res.status(404).json({ error: 'Contact not found' });
+
+  const key = getConvKey(userId, contactId);
+  const secret = getConversationSecret(userId, contactId);
   const raw = messages.get(key) || [];
   const decrypted = raw.map(m => ({
-    ...m,
+    id: m.id,
+    mine: m.from === userId,
     text: decryptMessage(m.encrypted, secret) || '[decryption failed]',
-    encrypted: undefined
+    timestamp: m.timestamp
   }));
   res.json(decrypted);
 });
 
 // ─── WEBSOCKET ──────────────────────────────────────────
 wss.on('connection', (ws) => {
-  let authenticatedUserId = null;
+  let userId = null; // internal ID — resolved from session token
 
   ws.on('message', (rawData) => {
     let msg;
-    try {
-      msg = JSON.parse(rawData.toString());
-    } catch {
-      ws.send(JSON.stringify({ type: 'error', error: 'Invalid message format' }));
-      return;
-    }
-
-    if (typeof msg.type !== 'string') {
-      ws.send(JSON.stringify({ type: 'error', error: 'Invalid type' }));
-      return;
-    }
+    try { msg = JSON.parse(rawData.toString()); }
+    catch { ws.send(JSON.stringify({ type: 'error', error: 'Invalid format' })); return; }
+    if (typeof msg.type !== 'string') return;
 
     switch (msg.type) {
       case 'auth': {
-        const userId = msg.userId;
-        if (!isValidUserId(userId) || !users.has(userId)) {
-          ws.send(JSON.stringify({ type: 'error', error: 'Authentication failed' }));
+        const uid = resolveSession(msg.token);
+        if (!uid || !users.has(uid)) {
+          ws.send(JSON.stringify({ type: 'error', error: 'Auth failed' }));
           return;
         }
-        authenticatedUserId = userId;
+        userId = uid;
         wsClients.set(userId, ws);
-        ws.send(JSON.stringify({ type: 'auth_ok', userId }));
+        ws.send(JSON.stringify({ type: 'auth_ok' }));
         broadcastOnlineStatus(userId, true);
         break;
       }
 
       case 'send_message': {
-        if (!authenticatedUserId) {
-          ws.send(JSON.stringify({ type: 'error', error: 'Not authenticated' }));
-          return;
-        }
-        const toId = msg.to;
-        const text = msg.text;
+        if (!userId) { ws.send(JSON.stringify({ type: 'error', error: 'Not authenticated' })); return; }
+        const { to: toCode, text } = msg; // 'to' is recipient's PUBLIC CODE
 
-        if (!isValidUserId(toId)) {
-          ws.send(JSON.stringify({ type: 'error', error: 'Invalid recipient ID' }));
-          return;
-        }
-        if (!users.has(toId)) {
-          ws.send(JSON.stringify({ type: 'error', error: 'User not found' }));
-          return;
-        }
-        if (typeof text !== 'string' || text.trim().length === 0) {
-          ws.send(JSON.stringify({ type: 'error', error: 'Empty message' }));
-          return;
-        }
+        if (!isValidPublicCode(toCode)) { ws.send(JSON.stringify({ type: 'error', error: 'Invalid recipient' })); return; }
+        const toId = pubcodes.get(toCode);
+        if (!toId || !users.has(toId)) { ws.send(JSON.stringify({ type: 'error', error: 'User not found' })); return; }
+        if (typeof text !== 'string' || !text.trim()) { ws.send(JSON.stringify({ type: 'error', error: 'Empty message' })); return; }
 
         const safeText = sanitizeText(text.trim());
-        const secret = getConversationSecret(authenticatedUserId, toId);
+        const secret = getConversationSecret(userId, toId);
         const encrypted = encryptMessage(safeText, secret);
 
-        const msgObj = {
-          id: crypto.randomUUID(),
-          from: authenticatedUserId,
-          to: toId,
-          encrypted,
-          timestamp: Date.now()
-        };
-
-        const convKey = getConvKey(authenticatedUserId, toId);
-        const isFirstMessage = !messages.has(convKey) || messages.get(convKey).length === 0;
+        const msgObj = { id: crypto.randomUUID(), from: userId, to: toId, encrypted, timestamp: Date.now() };
+        const convKey = getConvKey(userId, toId);
+        const isFirst = !messages.has(convKey) || !messages.get(convKey).length;
         if (!messages.has(convKey)) messages.set(convKey, []);
         messages.get(convKey).push(msgObj);
-        saveMessages(); // persist immediately
+        saveMessages();
 
+        const senderUser = users.get(userId);
         const recipientWs = wsClients.get(toId);
 
-        if (isFirstMessage && recipientWs && recipientWs.readyState === WebSocket.OPEN) {
+        if (isFirst && recipientWs?.readyState === WebSocket.OPEN) {
           recipientWs.send(JSON.stringify({
             type: 'chat_started',
-            fromId: authenticatedUserId,
-            fromName: users.get(authenticatedUserId)?.displayName || '',
+            fromCode: senderUser.publicCode,
+            fromName: senderUser.displayName || '',
             online: true
           }));
         }
 
-        const senderName = users.get(authenticatedUserId)?.displayName || '';
-        const deliveryPayload = {
-          type: 'new_message',
-          id: msgObj.id,
-          from: authenticatedUserId,
-          fromName: senderName,
-          text: safeText,
-          timestamp: msgObj.timestamp
-        };
-
-        if (recipientWs && recipientWs.readyState === WebSocket.OPEN) {
-          recipientWs.send(JSON.stringify(deliveryPayload));
+        if (recipientWs?.readyState === WebSocket.OPEN) {
+          recipientWs.send(JSON.stringify({
+            type: 'new_message',
+            id: msgObj.id,
+            from: senderUser.publicCode,
+            fromName: senderUser.displayName || '',
+            text: safeText,
+            timestamp: msgObj.timestamp
+          }));
         }
 
         ws.send(JSON.stringify({
           type: 'message_sent',
           id: msgObj.id,
-          to: toId,
+          to: toCode,
           text: safeText,
           timestamp: msgObj.timestamp
         }));
@@ -357,61 +429,70 @@ wss.on('connection', (ws) => {
       }
 
       case 'start_chat': {
-        if (!authenticatedUserId) return;
-        const toId = msg.to;
-        if (!isValidUserId(toId) || !users.has(toId)) return;
-
-        const convKey = getConvKey(authenticatedUserId, toId);
-        const alreadyHasMessages = messages.has(convKey) && messages.get(convKey).length > 0;
-
-        if (!alreadyHasMessages) {
-          const recipientWs = wsClients.get(toId);
-          if (recipientWs && recipientWs.readyState === WebSocket.OPEN) {
-            recipientWs.send(JSON.stringify({
-              type: 'chat_started',
-              fromId: authenticatedUserId,
-              fromName: users.get(authenticatedUserId)?.displayName || '',
-              online: true
-            }));
-          }
+        if (!userId) return;
+        const toCode = msg.to;
+        if (!isValidPublicCode(toCode)) return;
+        const toId = pubcodes.get(toCode);
+        if (!toId || !users.has(toId)) return;
+        const convKey = getConvKey(userId, toId);
+        if (messages.has(convKey) && messages.get(convKey).length) return;
+        const rws = wsClients.get(toId);
+        if (rws?.readyState === WebSocket.OPEN) {
+          const su = users.get(userId);
+          rws.send(JSON.stringify({ type: 'chat_started', fromCode: su.publicCode, fromName: su.displayName || '', online: true }));
         }
+        break;
+      }
+
+      case 'send_file': {
+        if (!userId) { ws.send(JSON.stringify({ type:'error', error:'Not authenticated' })); return; }
+        const { to: toCode, fileName, fileSize, fileType, data } = msg;
+        if (!isValidPublicCode(toCode)) return;
+        const toId = pubcodes.get(toCode);
+        if (!toId || !users.has(toId)) { ws.send(JSON.stringify({ type:'error', error:'User not found' })); return; }
+        // Validate file data
+        if (typeof data !== 'string' || !data.startsWith('data:')) { ws.send(JSON.stringify({ type:'error', error:'Invalid file data' })); return; }
+        if (data.length > 28 * 1024 * 1024) { ws.send(JSON.stringify({ type:'error', error:'File too large (max 20 MB)' })); return; }
+        const safeName = typeof fileName === 'string' ? fileName.replace(/[<>&"']/g,'').slice(0,255) : 'file';
+        const safeSize = typeof fileSize === 'number' ? fileSize : 0;
+        const safeType = typeof fileType === 'string' ? fileType.slice(0,100) : 'application/octet-stream';
+        const senderUser = users.get(userId);
+        const fileId = crypto.randomUUID();
+        const ts = Date.now();
+        const recipientWs = wsClients.get(toId);
+        if (recipientWs?.readyState === WebSocket.OPEN) {
+          recipientWs.send(JSON.stringify({ type:'new_file', id:fileId, from:senderUser.publicCode, fromName:senderUser.displayName||'', fileName:safeName, fileSize:safeSize, fileType:safeType, data, timestamp:ts }));
+        }
+        ws.send(JSON.stringify({ type:'file_sent', id:fileId, to:toCode, fileName:safeName, fileSize:safeSize, fileType:safeType, data, timestamp:ts }));
         break;
       }
 
       case 'ping':
         ws.send(JSON.stringify({ type: 'pong' }));
         break;
-
-      default:
-        ws.send(JSON.stringify({ type: 'error', error: 'Unknown message type' }));
     }
   });
 
   ws.on('close', () => {
-    if (authenticatedUserId) {
-      wsClients.delete(authenticatedUserId);
-      broadcastOnlineStatus(authenticatedUserId, false);
-    }
+    if (userId) { wsClients.delete(userId); broadcastOnlineStatus(userId, false); }
   });
-
   ws.on('error', () => {
-    if (authenticatedUserId) wsClients.delete(authenticatedUserId);
+    if (userId) wsClients.delete(userId);
   });
 });
 
 function broadcastOnlineStatus(userId, online) {
+  const u = users.get(userId);
   for (const [key] of messages) {
     const [a, b] = key.split('::');
-    const otherId = a === userId ? b : b === userId ? a : null;
-    if (!otherId) continue;
-    const otherWs = wsClients.get(otherId);
-    if (otherWs && otherWs.readyState === WebSocket.OPEN) {
-      otherWs.send(JSON.stringify({ type: 'status_change', userId, online }));
+    const other = a === userId ? b : b === userId ? a : null;
+    if (!other) continue;
+    const ows = wsClients.get(other);
+    if (ows?.readyState === WebSocket.OPEN) {
+      ows.send(JSON.stringify({ type: 'status_change', publicCode: u?.publicCode, online }));
     }
   }
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`🔒 Secure Messenger running on http://localhost:${PORT}`);
-});
+server.listen(PORT, () => console.log(`🔒 NXMSG running on http://localhost:${PORT}`));
