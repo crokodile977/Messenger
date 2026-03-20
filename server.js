@@ -112,10 +112,33 @@ app.get('/api/user/:id', (req, res) => {
   const id = req.params.id;
   if (!isValidUserId(id)) return res.status(400).json({ error: 'Invalid ID format' });
   if (users.has(id)) {
-    res.json({ exists: true, online: wsClients.has(id) });
+    const u = users.get(id);
+    res.json({ exists: true, online: wsClients.has(id), displayName: u.displayName || '' });
   } else {
     res.json({ exists: false });
   }
+});
+
+
+// REST: Update display name
+app.patch('/api/user/:id/name', (req, res) => {
+  const id = req.params.id;
+  if (!isValidUserId(id)) return res.status(400).json({ error: 'Invalid ID format' });
+  if (!users.has(id)) return res.status(404).json({ error: 'User not found' });
+  const { name } = req.body;
+  if (typeof name !== 'string') return res.status(400).json({ error: 'Invalid name' });
+  const safeName = name.replace(/[<>&"'`\/=]/g, '').trim().slice(0, 32);
+  users.get(id).displayName = safeName;
+  for (const [key] of messages) {
+    const [a, b] = key.split('::');
+    const otherId = a === id ? b : b === id ? a : null;
+    if (!otherId) continue;
+    const otherWs = wsClients.get(otherId);
+    if (otherWs && otherWs.readyState === WebSocket.OPEN) {
+      otherWs.send(JSON.stringify({ type: 'name_changed', userId: id, displayName: safeName }));
+    }
+  }
+  res.json({ ok: true, displayName: safeName });
 });
 
 // REST: Get message history for a conversation
@@ -221,15 +244,18 @@ wss.on('connection', (ws) => {
           recipientWs.send(JSON.stringify({
             type: 'chat_started',
             fromId: authenticatedUserId,
+            fromName: users.get(authenticatedUserId)?.displayName || '',
             online: true
           }));
         }
 
+        const senderName = users.get(authenticatedUserId)?.displayName || '';
         const deliveryPayload = {
           type: 'new_message',
           id: msgObj.id,
           from: authenticatedUserId,
-          text: safeText, // already sanitized plain text
+          fromName: senderName,
+          text: safeText,
           timestamp: msgObj.timestamp
         };
 
