@@ -3,6 +3,7 @@ const http = require('http');
 const WebSocket = require('ws');
 const crypto = require('crypto');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
@@ -20,12 +21,69 @@ app.use((req, res, next) => {
   next();
 });
 
-// In-memory stores
-const users = new Map();       // userId -> { id, publicKey, connectedAt }
-const messages = new Map();    // conversationKey -> [messages]
-const wsClients = new Map();   // userId -> ws
+// ─── PERSISTENCE ────────────────────────────────────────
+const DATA_DIR = path.join(__dirname, 'data');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
 
-// Generate a cryptographically secure unique ID (~20 chars, letters + special chars)
+// Ensure data directory exists
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+// Load users from disk
+function loadUsers() {
+  try {
+    if (fs.existsSync(USERS_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+      return new Map(Object.entries(raw));
+    }
+  } catch (e) { console.error('Failed to load users:', e.message); }
+  return new Map();
+}
+
+// Load messages from disk
+function loadMessages() {
+  try {
+    if (fs.existsSync(MESSAGES_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(MESSAGES_FILE, 'utf8'));
+      return new Map(Object.entries(raw));
+    }
+  } catch (e) { console.error('Failed to load messages:', e.message); }
+  return new Map();
+}
+
+// Debounced save — coalesces rapid writes into one
+let saveUsersTimer = null;
+let saveMessagesTimer = null;
+
+function saveUsers() {
+  clearTimeout(saveUsersTimer);
+  saveUsersTimer = setTimeout(() => {
+    try {
+      const obj = Object.fromEntries(users);
+      fs.writeFileSync(USERS_FILE, JSON.stringify(obj), 'utf8');
+    } catch (e) { console.error('Failed to save users:', e.message); }
+  }, 300);
+}
+
+function saveMessages() {
+  clearTimeout(saveMessagesTimer);
+  saveMessagesTimer = setTimeout(() => {
+    try {
+      const obj = Object.fromEntries(messages);
+      fs.writeFileSync(MESSAGES_FILE, JSON.stringify(obj), 'utf8');
+    } catch (e) { console.error('Failed to save messages:', e.message); }
+  }, 300);
+}
+
+// In-memory stores — pre-loaded from disk
+const users = loadUsers();
+const messages = loadMessages();
+const wsClients = new Map();   // userId -> ws  (never persisted — runtime only)
+
+console.log(`📂 Loaded ${users.size} users, ${messages.size} conversations from disk`);
+
+// ─── CRYPTO HELPERS ────────────────────────────────────
+
 function generateUserId() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*-_+=~';
   let id = '';
@@ -36,7 +94,6 @@ function generateUserId() {
   return id;
 }
 
-// Encrypt message content server-side (AES-256-GCM)
 function encryptMessage(text, sharedSecret) {
   const key = crypto.createHash('sha256').update(sharedSecret).digest();
   const iv = crypto.randomBytes(16);
@@ -63,18 +120,15 @@ function decryptMessage(encryptedData, sharedSecret) {
   }
 }
 
-// Derive shared secret for a conversation
 function getConversationSecret(id1, id2) {
   const sorted = [id1, id2].sort().join('|');
   return crypto.createHmac('sha256', 'messenger-secret-key-2024').update(sorted).digest('hex');
 }
 
-// Conversation key (sorted so A->B and B->A use same key)
 function getConvKey(id1, id2) {
   return [id1, id2].sort().join('::');
 }
 
-// Sanitize text — strip all HTML tags and dangerous chars to prevent XSS/injection
 function sanitizeText(input) {
   if (typeof input !== 'string') return '';
   return input
@@ -86,28 +140,26 @@ function sanitizeText(input) {
     .replace(/\//g, '&#x2F;')
     .replace(/`/g, '&#x60;')
     .replace(/=/g, '&#x3D;')
-    .slice(0, 4000); // max message length
+    .slice(0, 4000);
 }
 
-// Validate user ID format
 function isValidUserId(id) {
   if (typeof id !== 'string') return false;
   if (id.length < 18 || id.length > 24) return false;
-  const allowed = /^[A-Za-z0-9!@#$%^&*\-_+=~]+$/;
-  return allowed.test(id);
+  return /^[A-Za-z0-9!@#$%^&*\-_+=~]+$/.test(id);
 }
 
-// REST: Register new user
+// ─── REST API ───────────────────────────────────────────
+
+// Register new user
 app.post('/api/register', (req, res) => {
   const userId = generateUserId();
-  users.set(userId, {
-    id: userId,
-    registeredAt: Date.now()
-  });
+  users.set(userId, { id: userId, registeredAt: Date.now(), displayName: '' });
+  saveUsers();
   res.json({ userId });
 });
 
-// REST: Check if user exists
+// Check if user exists
 app.get('/api/user/:id', (req, res) => {
   const id = req.params.id;
   if (!isValidUserId(id)) return res.status(400).json({ error: 'Invalid ID format' });
@@ -119,8 +171,7 @@ app.get('/api/user/:id', (req, res) => {
   }
 });
 
-
-// REST: Update display name
+// Update display name
 app.patch('/api/user/:id/name', (req, res) => {
   const id = req.params.id;
   if (!isValidUserId(id)) return res.status(400).json({ error: 'Invalid ID format' });
@@ -129,6 +180,8 @@ app.patch('/api/user/:id/name', (req, res) => {
   if (typeof name !== 'string') return res.status(400).json({ error: 'Invalid name' });
   const safeName = name.replace(/[<>&"'`\/=]/g, '').trim().slice(0, 32);
   users.get(id).displayName = safeName;
+  saveUsers();
+  // Broadcast name change to online contacts
   for (const [key] of messages) {
     const [a, b] = key.split('::');
     const otherId = a === id ? b : b === id ? a : null;
@@ -141,7 +194,43 @@ app.patch('/api/user/:id/name', (req, res) => {
   res.json({ ok: true, displayName: safeName });
 });
 
-// REST: Get message history for a conversation
+// Get all contacts for a user (everyone they've had a conversation with)
+app.get('/api/contacts/:userId', (req, res) => {
+  const userId = req.params.userId;
+  if (!isValidUserId(userId)) return res.status(400).json({ error: 'Invalid ID format' });
+  if (!users.has(userId)) return res.status(404).json({ error: 'User not found' });
+
+  const contacts = [];
+  for (const [key, msgs] of messages) {
+    const [a, b] = key.split('::');
+    if (a !== userId && b !== userId) continue;
+    const contactId = a === userId ? b : a;
+    if (!users.has(contactId)) continue;
+
+    const contactUser = users.get(contactId);
+    const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+    const secret = getConversationSecret(userId, contactId);
+    const lastText = lastMsg
+      ? (decryptMessage(lastMsg.encrypted, secret) || '')
+      : '';
+
+    contacts.push({
+      contactId,
+      displayName: contactUser.displayName || '',
+      online: wsClients.has(contactId),
+      lastTimestamp: lastMsg ? lastMsg.timestamp : 0,
+      lastText,
+      lastFrom: lastMsg ? lastMsg.from : null,
+      messageCount: msgs.length
+    });
+  }
+
+  // Sort by last message time descending
+  contacts.sort((a, b) => b.lastTimestamp - a.lastTimestamp);
+  res.json(contacts);
+});
+
+// Get message history for a conversation
 app.get('/api/messages/:myId/:theirId', (req, res) => {
   const { myId, theirId } = req.params;
   if (!isValidUserId(myId) || !isValidUserId(theirId)) {
@@ -161,21 +250,19 @@ app.get('/api/messages/:myId/:theirId', (req, res) => {
   res.json(decrypted);
 });
 
-// WebSocket handling
+// ─── WEBSOCKET ──────────────────────────────────────────
 wss.on('connection', (ws) => {
   let authenticatedUserId = null;
 
   ws.on('message', (rawData) => {
     let msg;
     try {
-      // Strict JSON parse only — no eval, no dynamic execution
       msg = JSON.parse(rawData.toString());
     } catch {
       ws.send(JSON.stringify({ type: 'error', error: 'Invalid message format' }));
       return;
     }
 
-    // Validate message type is a plain string
     if (typeof msg.type !== 'string') {
       ws.send(JSON.stringify({ type: 'error', error: 'Invalid type' }));
       return;
@@ -191,8 +278,6 @@ wss.on('connection', (ws) => {
         authenticatedUserId = userId;
         wsClients.set(userId, ws);
         ws.send(JSON.stringify({ type: 'auth_ok', userId }));
-
-        // Notify contacts that this user came online
         broadcastOnlineStatus(userId, true);
         break;
       }
@@ -218,7 +303,6 @@ wss.on('connection', (ws) => {
           return;
         }
 
-        // Sanitize text BEFORE encryption — strip HTML/JS injection vectors
         const safeText = sanitizeText(text.trim());
         const secret = getConversationSecret(authenticatedUserId, toId);
         const encrypted = encryptMessage(safeText, secret);
@@ -235,11 +319,10 @@ wss.on('connection', (ws) => {
         const isFirstMessage = !messages.has(convKey) || messages.get(convKey).length === 0;
         if (!messages.has(convKey)) messages.set(convKey, []);
         messages.get(convKey).push(msgObj);
+        saveMessages(); // persist immediately
 
-        // Deliver to recipient if online
         const recipientWs = wsClients.get(toId);
 
-        // If this is the very first message — notify recipient that a new chat was started
         if (isFirstMessage && recipientWs && recipientWs.readyState === WebSocket.OPEN) {
           recipientWs.send(JSON.stringify({
             type: 'chat_started',
@@ -263,7 +346,6 @@ wss.on('connection', (ws) => {
           recipientWs.send(JSON.stringify(deliveryPayload));
         }
 
-        // Confirm delivery to sender
         ws.send(JSON.stringify({
           type: 'message_sent',
           id: msgObj.id,
@@ -274,7 +356,6 @@ wss.on('connection', (ws) => {
         break;
       }
 
-      // Notify recipient that someone opened a chat with them (no message yet)
       case 'start_chat': {
         if (!authenticatedUserId) return;
         const toId = msg.to;
@@ -283,13 +364,13 @@ wss.on('connection', (ws) => {
         const convKey = getConvKey(authenticatedUserId, toId);
         const alreadyHasMessages = messages.has(convKey) && messages.get(convKey).length > 0;
 
-        // Only notify if no prior conversation exists yet
         if (!alreadyHasMessages) {
           const recipientWs = wsClients.get(toId);
           if (recipientWs && recipientWs.readyState === WebSocket.OPEN) {
             recipientWs.send(JSON.stringify({
               type: 'chat_started',
               fromId: authenticatedUserId,
+              fromName: users.get(authenticatedUserId)?.displayName || '',
               online: true
             }));
           }
@@ -319,7 +400,6 @@ wss.on('connection', (ws) => {
 });
 
 function broadcastOnlineStatus(userId, online) {
-  // Notify all conversations this user is part of
   for (const [key] of messages) {
     const [a, b] = key.split('::');
     const otherId = a === userId ? b : b === userId ? a : null;
