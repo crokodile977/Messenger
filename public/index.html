@@ -719,6 +719,119 @@
     line-height: 1.7;
   }
 
+
+  /* ─── USERNAME DISPLAY ──────────────────── */
+  .chat-name {
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .my-name-bar {
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .my-name-bar:hover { background: var(--orange-glow2); }
+  .my-name-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    white-space: nowrap;
+  }
+  .my-name-value {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-dim);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .my-name-value.set { color: var(--text); }
+  .edit-icon { font-size: 11px; color: var(--text-muted); }
+
+  /* ─── NOTIF PERMISSION BANNER ───────────── */
+  .notif-banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: var(--orange-glow);
+    border-bottom: 1px solid var(--orange);
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .notif-banner.visible { display: flex; }
+  .notif-banner-icon { font-size: 16px; }
+  .notif-banner-text { flex: 1; }
+  .notif-banner-btn {
+    background: var(--orange);
+    border: none;
+    color: #000;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 5px 12px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    white-space: nowrap;
+    outline: none;
+  }
+  .notif-banner-btn:hover { background: #ff7733; }
+  .notif-banner-dismiss {
+    background: none; border: none;
+    color: var(--text-muted); font-size: 16px;
+    cursor: pointer; outline: none; padding: 0 4px;
+  }
+  .notif-banner-dismiss:hover { color: var(--text); }
+
+  /* ─── SETTINGS MODAL extras ─────────────── */
+  .setting-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .setting-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .setting-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: var(--mono);
+  }
+  .notif-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  .notif-status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .notif-status-dot.granted { background: var(--online); }
+  .notif-status-dot.denied { background: #cc3333; }
   /* ─── ENCRYPTED BADGE ───────────────── */
   .enc-badge {
     display: flex;
@@ -786,6 +899,19 @@
       <span class="my-id-label">ID:</span>
       <span class="my-id-value" id="sidebar-my-id" onclick="copyMyId()" title="Нажмите чтобы скопировать"></span>
       <button class="copy-btn" onclick="copyMyId()" title="Скопировать">⧉</button>
+    </div>
+
+    <div class="my-name-bar" onclick="showSettings()" title="Настроить имя">
+      <span class="my-name-label">Имя:</span>
+      <span class="my-name-value" id="sidebar-my-name">Нажмите чтобы задать имя</span>
+      <span class="edit-icon">✎</span>
+    </div>
+
+    <div id="notif-banner" class="notif-banner">
+      <span class="notif-banner-icon">🔔</span>
+      <span class="notif-banner-text">Включить системные уведомления?</span>
+      <button class="notif-banner-btn" onclick="requestNotifPermission()">Включить</button>
+      <button class="notif-banner-dismiss" onclick="dismissNotifBanner()" title="Закрыть">✕</button>
     </div>
 
     <div class="chats-label">
@@ -881,6 +1007,34 @@
   </div>
 </div>
 
+<!-- Settings Modal -->
+<div class="modal-overlay" id="modal-settings">
+  <div class="modal">
+    <div class="modal-title">
+      Настройки
+      <button class="modal-close" onclick="closeModal('modal-settings')">✕</button>
+    </div>
+    <div class="setting-row">
+      <div class="setting-label">Отображаемое имя</div>
+      <input type="text" id="settings-name-input" class="input"
+        placeholder="Введите имя (до 32 символов)..."
+        maxlength="32" autocomplete="off" spellcheck="false">
+      <div class="setting-hint">// Видно всем вашим собеседникам</div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-label">Системные уведомления</div>
+      <div class="notif-status" id="notif-status-row">
+        <div class="notif-status-dot" id="notif-status-dot"></div>
+        <span id="notif-status-text">Проверяем...</span>
+      </div>
+      <button class="btn btn-ghost" id="notif-request-btn" onclick="requestNotifPermission()" style="display:none">
+        🔔 Включить уведомления
+      </button>
+    </div>
+    <button class="btn btn-primary" onclick="saveSettings()">Сохранить</button>
+  </div>
+</div>
+
 <!-- Notifications container -->
 <div class="notif-container" id="notif-container"></div>
 
@@ -898,9 +1052,11 @@ const API = '';
 const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
 
 let myId = null;
+let myName = '';
 let ws = null;
 let activeChat = null;
-let chats = {}; // contactId -> { messages: [], unread: 0, online: false }
+let chats = {}; // contactId -> { messages: [], unread: 0, online: false, name: '' }
+const contactNames = {}; // contactId -> displayName
 let scanStream = null;
 let scanAnimFrame = null;
 let pingInterval = null;
@@ -914,6 +1070,19 @@ function loadSession() {
 }
 function clearSession() {
   try { localStorage.removeItem('nxmsg_id'); } catch {}
+  try { localStorage.removeItem('nxmsg_name'); } catch {}
+}
+function saveName(name) {
+  try { localStorage.setItem('nxmsg_name', name); } catch {}
+}
+function loadName() {
+  try { return localStorage.getItem('nxmsg_name') || ''; } catch { return ''; }
+}
+// Helper: get display name for a contact (name or truncated ID)
+function getDisplayName(contactId) {
+  if (contactNames[contactId]) return contactNames[contactId];
+  if (chats[contactId] && chats[contactId].name) return chats[contactId].name;
+  return contactId;
 }
 
 // ─── SCREEN MANAGEMENT ─────────────────────────────────
@@ -972,11 +1141,27 @@ function logout() {
 
 // ─── INIT ──────────────────────────────────────────────
 async function initApp() {
-  // Render my id safely
+  // Load saved name
+  myName = loadName();
   document.getElementById('sidebar-my-id').textContent = myId;
+  updateMyNameBar();
   renderChatList();
   showScreen('screen-app');
   connectWS();
+  // Request notification permission after short delay (less jarring)
+  const notifDismissed = (() => { try { return localStorage.getItem('nxmsg_notif_dismissed'); } catch { return null; } })();
+  if (!notifDismissed) setTimeout(checkNotifPermission, 1500);
+}
+
+function updateMyNameBar() {
+  const el = document.getElementById('sidebar-my-name');
+  if (myName) {
+    el.textContent = myName;
+    el.classList.add('set');
+  } else {
+    el.textContent = 'Нажмите чтобы задать имя';
+    el.classList.remove('set');
+  }
 }
 
 // ─── WEBSOCKET ─────────────────────────────────────────
@@ -1020,9 +1205,13 @@ function handleServerMessage(msg) {
 
       if (!from || !text) return;
 
+      const fromName = String(msg.fromName || '');
       if (!chats[from]) {
-        chats[from] = { messages: [], unread: 0, online: true };
+        chats[from] = { messages: [], unread: 0, online: true, name: fromName };
+      } else if (fromName && !chats[from].name) {
+        chats[from].name = fromName;
       }
+      if (fromName) contactNames[from] = fromName;
 
       const msgObj = { id, from, text, timestamp: ts, mine: false };
       chats[from].messages.push(msgObj);
@@ -1033,6 +1222,7 @@ function handleServerMessage(msg) {
       } else {
         chats[from].unread = (chats[from].unread || 0) + 1;
         showNotification(from, text);
+        sendSystemNotif(from, text);
       }
 
       renderChatList();
@@ -1076,11 +1266,28 @@ function handleServerMessage(msg) {
       // Someone opened a chat with us — add them to our chat list
       const fromId = String(msg.fromId || '');
       if (!fromId || !isValidId(fromId)) return;
+      const chatFromName = String(msg.fromName || '');
       if (!chats[fromId]) {
-        chats[fromId] = { messages: [], unread: 0, online: Boolean(msg.online) };
+        chats[fromId] = { messages: [], unread: 0, online: Boolean(msg.online), name: chatFromName };
+        if (chatFromName) contactNames[fromId] = chatFromName;
         renderChatList();
         showNotification(fromId, '✦ Новый чат');
+        sendSystemNotif(fromId, '✦ Новый чат');
+      } else if (chatFromName && !chats[fromId].name) {
+        chats[fromId].name = chatFromName;
+        contactNames[fromId] = chatFromName;
       }
+      break;
+    }
+
+    case 'name_changed': {
+      const uid = String(msg.userId || '');
+      const dname = String(msg.displayName || '');
+      if (!uid) return;
+      contactNames[uid] = dname;
+      if (chats[uid]) chats[uid].name = dname;
+      renderChatList();
+      if (activeChat === uid) updateChatHeader(uid);
       break;
     }
 
@@ -1141,6 +1348,11 @@ function renderChatList() {
     const info = document.createElement('div');
     info.className = 'chat-info';
 
+    const displayName = getDisplayName(contactId);
+    const nameEl = document.createElement('div');
+    nameEl.className = 'chat-name';
+    nameEl.textContent = displayName;
+
     const idEl = document.createElement('div');
     idEl.className = 'chat-id';
     idEl.textContent = contactId; // safe textContent
@@ -1150,6 +1362,7 @@ function renderChatList() {
     // All text content, never innerHTML
     lastEl.textContent = last ? (last.mine ? '▶ ' + last.text : last.text) : '';
 
+    info.appendChild(nameEl);
     info.appendChild(idEl);
     info.appendChild(lastEl);
 
@@ -1226,10 +1439,12 @@ async function openChat(contactId) {
 
 function updateChatHeader(contactId) {
   const idEl = document.getElementById('chat-header-id');
-  idEl.textContent = contactId; // safe textContent
+  const dname = getDisplayName(contactId);
+  idEl.textContent = dname !== contactId ? dname + ' · ' + contactId : contactId;
 
   const avatarEl = document.getElementById('chat-header-avatar');
-  avatarEl.textContent = contactId.slice(0, 2).toUpperCase();
+  const initials = dname !== contactId ? dname.slice(0, 2).toUpperCase() : contactId.slice(0, 2).toUpperCase();
+  avatarEl.textContent = initials;
 
   const statusEl = document.getElementById('chat-header-status');
   const online = chats[contactId]?.online || false;
@@ -1399,7 +1614,7 @@ function showNotification(fromId, text) {
 
   const fromEl = document.createElement('div');
   fromEl.className = 'notif-from';
-  fromEl.textContent = fromId; // safe textContent
+  fromEl.textContent = getDisplayName(fromId); // safe textContent
 
   const textEl = document.createElement('div');
   textEl.className = 'notif-text';
@@ -1412,6 +1627,102 @@ function showNotification(fromId, text) {
   container.appendChild(notif);
 
   setTimeout(() => notif.remove(), 5000);
+}
+
+
+// ─── SETTINGS ──────────────────────────────────────────
+function showSettings() {
+  const input = document.getElementById('settings-name-input');
+  input.value = myName;
+  updateNotifStatusUI();
+  openModal('modal-settings');
+}
+
+async function saveSettings() {
+  const raw = document.getElementById('settings-name-input').value.trim();
+  const newName = raw.slice(0, 32);
+  if (newName === myName) { closeModal('modal-settings'); return; }
+  try {
+    const res = await fetch('/api/user/' + encodeURIComponent(myId) + '/name', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      myName = data.displayName;
+      saveName(myName);
+      updateMyNameBar();
+      closeModal('modal-settings');
+      showToast('Имя обновлено');
+    }
+  } catch {
+    showToast('Ошибка сохранения');
+  }
+}
+
+// ─── NOTIFICATIONS API ─────────────────────────────────
+function checkNotifPermission() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default') {
+    // Show inline banner — less aggressive than immediate prompt
+    const banner = document.getElementById('notif-banner');
+    if (banner) banner.classList.add('visible');
+  }
+}
+
+function dismissNotifBanner() {
+  const banner = document.getElementById('notif-banner');
+  if (banner) banner.classList.remove('visible');
+  try { localStorage.setItem('nxmsg_notif_dismissed', '1'); } catch {}
+}
+
+async function requestNotifPermission() {
+  if (!('Notification' in window)) {
+    showToast('Уведомления не поддерживаются браузером');
+    return;
+  }
+  const result = await Notification.requestPermission();
+  const banner = document.getElementById('notif-banner');
+  if (banner) banner.classList.remove('visible');
+  updateNotifStatusUI();
+  if (result === 'granted') showToast('Уведомления включены');
+  else if (result === 'denied') showToast('Уведомления заблокированы');
+}
+
+function updateNotifStatusUI() {
+  const dot = document.getElementById('notif-status-dot');
+  const text = document.getElementById('notif-status-text');
+  const btn = document.getElementById('notif-request-btn');
+  if (!dot || !text) return;
+  if (!('Notification' in window)) {
+    dot.className = 'notif-status-dot';
+    text.textContent = 'Не поддерживается браузером';
+    if (btn) btn.style.display = 'none';
+    return;
+  }
+  const perm = Notification.permission;
+  dot.className = 'notif-status-dot ' + perm;
+  text.textContent = perm === 'granted' ? 'Включены' : perm === 'denied' ? 'Заблокированы в браузере' : 'Не настроены';
+  if (btn) btn.style.display = perm === 'default' ? 'flex' : 'none';
+}
+
+function sendSystemNotif(fromId, text) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (document.visibilityState === 'visible' && activeChat === fromId) return; // don't notif if chat is open
+  const title = getDisplayName(fromId);
+  const notif = new Notification('NXMSG — ' + title, {
+    body: text,
+    icon: 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 fill=%22%230a0a0a%22/><text x=%2216%22 y=%2222%22 text-anchor=%22middle%22 font-size=%2218%22 font-weight=%22bold%22 fill=%22%23FF5C00%22>N</text></svg>',
+    tag: 'nxmsg-' + fromId,
+    silent: false
+  });
+  notif.onclick = () => {
+    window.focus();
+    openChat(fromId);
+    notif.close();
+  };
+  setTimeout(() => notif.close(), 6000);
 }
 
 // ─── MODAL ─────────────────────────────────────────────
@@ -1497,6 +1808,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Login input enter
   document.getElementById('login-id-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') loginWithId();
+  });
+
+  // Settings name input enter
+  document.getElementById('settings-name-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveSettings();
   });
 });
 </script>
