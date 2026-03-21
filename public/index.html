@@ -2,6 +2,13 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="NXMSG">
+<meta name="theme-color" content="#0a0a0a">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NXMSG — Secure Messenger</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -318,9 +325,9 @@
     <div class="logo-sub">Secure · Private · Encrypted</div>
   </div>
   <div class="welcome-actions">
-    <button class="btn btn-primary" onclick="showScreen('screen-register')">⚡ Создать аккаунт</button>
+    <button class="btn btn-primary" onclick="tryFullscreen();showScreen('screen-register')">⚡ Создать аккаунт</button>
     <div class="divider">или</div>
-    <button class="btn btn-ghost" onclick="showScreen('screen-login')">Войти</button>
+    <button class="btn btn-ghost" onclick="tryFullscreen();showScreen('screen-login')">Войти</button>
   </div>
 </div>
 
@@ -683,6 +690,11 @@ function logout() {
 
 // ─── INIT APP ────────────────────────────────────────
 async function initApp() {
+  // На мобиле пробуем fullscreen при первом touch-событии
+  if (isMobile()) {
+    const onFirstTouch = () => { tryFullscreen(); document.removeEventListener('touchstart', onFirstTouch); };
+    document.addEventListener('touchstart', onFirstTouch, { once: true });
+  }
   applyTheme(LS.load('nxmsg_theme') || 'dark');
   loadLocalAliases();
   showScreen('screen-app');
@@ -1461,6 +1473,35 @@ function showToast(text) {
   t.textContent = text;
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+
+// ─── FULLSCREEN (mobile) ──────────────────────────────
+function tryFullscreen() {
+  const el = document.documentElement;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
+  if (req) req.call(el).catch(() => {});
+}
+
+// Восстанавливать fullscreen если пользователь случайно вышел
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && isMobile()) {
+    // Небольшая задержка чтобы не мешать намеренному выходу
+    setTimeout(() => {
+      if (!document.fullscreenElement) tryFullscreen();
+    }, 1500);
+  }
+});
+document.addEventListener('webkitfullscreenchange', () => {
+  if (!document.webkitFullscreenElement && isMobile()) {
+    setTimeout(() => {
+      if (!document.webkitFullscreenElement) tryFullscreen();
+    }, 1500);
+  }
+});
+
+function isMobile() {
+  return window.innerWidth <= 900 || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
 
 // ─── BOOT ────────────────────────────────────────────
