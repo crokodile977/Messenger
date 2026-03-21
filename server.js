@@ -26,12 +26,12 @@ const { Pool } = require('pg');
 
 // DATABASE_URL is set automatically by Render when you attach a PostgreSQL database.
 // For local dev, set it in .env or environment: DATABASE_URL=postgresql://user:pass@host/db
-const pool = new Pool({
+const pool = process.env.DATABASE_URL ? new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('render.com')
+  ssl: process.env.DATABASE_URL.includes('render.com')
     ? { rejectUnauthorized: false }
     : false
-});
+}) : null;
 
 // In-memory cache (populated from DB on startup, kept in sync on writes)
 // users    : userId  -> { id, passwordHash, displayName, bio, avatar, registeredAt, publicCode }
@@ -45,6 +45,7 @@ const sessions = new Map();
 
 // ── Schema init ──────────────────────────────────────────
 async function initDB() {
+  if (!pool) { console.log('⚠️  No DATABASE_URL — running with in-memory storage only'); return; }
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id            TEXT PRIMARY KEY,
@@ -69,6 +70,7 @@ async function initDB() {
 
 // ── Load all data into memory on startup ─────────────────
 async function loadFromDB() {
+  if (!pool) return;
   const { rows: uRows } = await pool.query('SELECT * FROM users');
   for (const r of uRows) {
     const u = { id: r.id, publicCode: r.public_code, passwordHash: r.password_hash,
@@ -91,15 +93,18 @@ async function loadFromDB() {
 async function saveUser(u) {
   users.set(u.id, u);
   pubcodes.set(u.publicCode, u.id);
-  await pool.query(`
-    INSERT INTO users (id, public_code, password_hash, display_name, bio, avatar, registered_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7)
-    ON CONFLICT (id) DO UPDATE SET
-      display_name = EXCLUDED.display_name,
-      bio          = EXCLUDED.bio,
-      avatar       = EXCLUDED.avatar,
-      password_hash= EXCLUDED.password_hash
-  `, [u.id, u.publicCode, u.passwordHash, u.displayName || '', u.bio || '', u.avatar || null, u.registeredAt]);
+  if (!pool) return; // no DB configured — in-memory only
+  try {
+    await pool.query(`
+      INSERT INTO users (id, public_code, password_hash, display_name, bio, avatar, registered_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      ON CONFLICT (id) DO UPDATE SET
+        display_name = EXCLUDED.display_name,
+        bio          = EXCLUDED.bio,
+        avatar       = EXCLUDED.avatar,
+        password_hash= EXCLUDED.password_hash
+    `, [u.id, u.publicCode, u.passwordHash, u.displayName || '', u.bio || '', u.avatar || null, u.registeredAt]);
+  } catch (e) { console.error('saveUser DB error:', e.message); }
 }
 
 // Debounce avatar saves (avatars are big base64 strings)
@@ -108,6 +113,7 @@ function saveUserAvatar(u) {
   users.set(u.id, u);
   clearTimeout(_avatarTimers[u.id]);
   _avatarTimers[u.id] = setTimeout(() => {
+    if (!pool) return;
     pool.query('UPDATE users SET avatar=$1 WHERE id=$2', [u.avatar || null, u.id])
       .catch(e => console.error('avatar save error:', e.message));
   }, 500);
@@ -116,10 +122,13 @@ function saveUserAvatar(u) {
 async function saveMessage(convKey, msgObj) {
   if (!messages.has(convKey)) messages.set(convKey, []);
   messages.get(convKey).push(msgObj);
-  await pool.query(`
-    INSERT INTO messages (id, conv_key, from_id, to_id, encrypted, ts)
-    VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING
-  `, [msgObj.id, convKey, msgObj.from, msgObj.to, msgObj.encrypted, msgObj.timestamp]);
+  if (!pool) return;
+  try {
+    await pool.query(`
+      INSERT INTO messages (id, conv_key, from_id, to_id, encrypted, ts)
+      VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING
+    `, [msgObj.id, convKey, msgObj.from, msgObj.to, msgObj.encrypted, msgObj.timestamp]);
+  } catch (e) { console.error('saveMessage DB error:', e.message); }
 }
 
 // Legacy no-ops (code still calls these in some places — safe to ignore)
@@ -519,12 +528,12 @@ wss.on('connection', (ws) => {
         const safeName = typeof fileName === 'string' ? fileName.replace(/[<>&"']/g,'').slice(0,255) : 'file';
         const safeSize = typeof fileSize === 'number' ? fileSize : 0;
         const safeType = typeof fileType === 'string' ? fileType.slice(0,100) : 'application/octet-stream';
-        const senderUser2 = users.get(userId);
+        const fileSender = users.get(userId);
         const fileId = crypto.randomUUID();
         const ts = Date.now();
         const recipientWs = wsClients.get(toId);
         if (recipientWs?.readyState === WebSocket.OPEN) {
-          recipientWs.send(JSON.stringify({ type:'new_file', id:fileId, from:senderUser.publicCode, fromName:senderUser.displayName||'', fileName:safeName, fileSize:safeSize, fileType:safeType, data, timestamp:ts }));
+          recipientWs.send(JSON.stringify({ type:'new_file', id:fileId, from:fileSender.publicCode, fromName:fileSender.displayName||'', fileName:safeName, fileSize:safeSize, fileType:safeType, data, timestamp:ts }));
         }
         ws.send(JSON.stringify({ type:'file_sent', id:fileId, to:toCode, fileName:safeName, fileSize:safeSize, fileType:safeType, data, timestamp:ts }));
         break;
