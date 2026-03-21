@@ -221,7 +221,7 @@ app.post('/api/session', (req, res) => {
   const userId = resolveSession(token);
   if (!userId || !users.has(userId)) return res.json({ valid: false });
   const u = users.get(userId);
-  res.json({ valid: true, displayName: u.displayName || '', publicCode: u.publicCode });
+  res.json({ valid: true, displayName: u.displayName || '', bio: u.bio || '', publicCode: u.publicCode });
 });
 
 // Lookup user by public code (for starting a chat) — returns exists + displayName only
@@ -231,7 +231,7 @@ app.get('/api/user/bycode/:code', (req, res) => {
   const userId = pubcodes.get(code);
   if (!userId || !users.has(userId)) return res.json({ exists: false });
   const u = users.get(userId);
-  res.json({ exists: true, online: wsClients.has(userId), displayName: u.displayName || '', publicCode: code });
+  res.json({ exists: true, online: wsClients.has(userId), displayName: u.displayName || '', bio: u.bio || '', publicCode: code });
 });
 
 // Update display name (authenticated)
@@ -241,7 +241,10 @@ app.patch('/api/user/name', (req, res) => {
   const { name } = req.body;
   if (typeof name !== 'string') return res.status(400).json({ error: 'Invalid name' });
   const safeName = name.replace(/[<>&"'`\/=]/g, '').trim().slice(0, 32);
+  const { bio } = req.body;
+  const safeBio = typeof bio === 'string' ? bio.replace(/[<>&"']/g, '').trim().slice(0, 80) : users.get(userId).bio || '';
   users.get(userId).displayName = safeName;
+  users.get(userId).bio = safeBio;
   saveUsers();
   // Broadcast name change
   for (const [key] of messages) {
@@ -253,7 +256,7 @@ app.patch('/api/user/name', (req, res) => {
       ows.send(JSON.stringify({ type: 'name_changed', publicCode: users.get(userId).publicCode, displayName: safeName }));
     }
   }
-  res.json({ ok: true, displayName: safeName });
+  res.json({ ok: true, displayName: safeName, bio: safeBio });
 });
 
 // Upload / update avatar
@@ -318,6 +321,7 @@ app.post('/api/contacts', (req, res) => {
     contacts.push({
       publicCode: cu.publicCode,
       displayName: cu.displayName || '',
+      bio: cu.bio || '',
       online: wsClients.has(contactId),
       lastTimestamp: lastMsg ? lastMsg.timestamp : 0,
       lastText,
@@ -456,7 +460,7 @@ wss.on('connection', (ws) => {
         const safeName = typeof fileName === 'string' ? fileName.replace(/[<>&"']/g,'').slice(0,255) : 'file';
         const safeSize = typeof fileSize === 'number' ? fileSize : 0;
         const safeType = typeof fileType === 'string' ? fileType.slice(0,100) : 'application/octet-stream';
-        const senderUser = users.get(userId);
+        const senderUser2 = users.get(userId);
         const fileId = crypto.randomUUID();
         const ts = Date.now();
         const recipientWs = wsClients.get(toId);
