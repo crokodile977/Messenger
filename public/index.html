@@ -491,6 +491,10 @@
         <button class="theme-btn" id="theme-light-btn" onclick="setTheme('light')">◻ Светлая</button>
       </div>
     </div>
+    <div class="setting-row">
+      <div class="setting-label">Полноэкранный режим</div>
+      <button class="btn btn-ghost" id="fullscreen-btn" onclick="toggleFullscreen()">⛶ Открыть полноэкранный режим</button>
+    </div>
     <button class="btn btn-primary" onclick="saveSettings()">Сохранить</button>
   </div>
 </div>
@@ -1252,6 +1256,7 @@ function stopScan() {
 // ─── SETTINGS ────────────────────────────────────────
 function showSettings() {
   document.getElementById('settings-name-input').value = myName;
+  updateFullscreenBtn();
   document.getElementById('settings-bio-input').value = myBio;
   const codeDisplay = document.getElementById('settings-code-display');
   if (codeDisplay) codeDisplay.textContent = myPublicCode || '';
@@ -1482,6 +1487,28 @@ function showToast(text) {
 
 
 // ─── FULLSCREEN (mobile) ──────────────────────────────
+function toggleFullscreen() {
+  const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  if (isFs) {
+    const exit = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen;
+    if (exit) exit.call(document).catch(() => {});
+  } else {
+    tryFullscreen();
+  }
+  updateFullscreenBtn();
+}
+
+function updateFullscreenBtn() {
+  const btn = document.getElementById('fullscreen-btn');
+  if (!btn) return;
+  const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  btn.textContent = isFs ? '⛶ Выйти из полноэкранного режима' : '⛶ Открыть полноэкранный режим';
+}
+
+// Обновлять кнопку при любом изменении fullscreen
+document.addEventListener('fullscreenchange', updateFullscreenBtn);
+document.addEventListener('webkitfullscreenchange', updateFullscreenBtn);
+
 function tryFullscreen() {
   const el = document.documentElement;
   const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
