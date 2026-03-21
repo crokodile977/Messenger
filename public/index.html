@@ -74,7 +74,7 @@
   .icon-btn:hover{border-color:var(--orange);color:var(--orange);background:var(--orange-glow2);}
 
   /* My code bar */
-  .my-code-bar{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;background:var(--bg3);}
+
   .my-code-label{font-family:var(--mono);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;white-space:nowrap;}
   .my-code-value{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--orange);flex:1;letter-spacing:2px;cursor:pointer;}
   .my-code-value:hover{color:#ff9966;}
@@ -82,8 +82,8 @@
   .copy-btn:hover{color:var(--orange);}
 
   /* Name bar */
-  .my-name-bar{padding:8px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;cursor:pointer;transition:background 0.12s;}
-  .my-name-bar:hover{background:var(--orange-glow2);}
+
+
   .my-name-label{font-family:var(--mono);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;white-space:nowrap;}
   .my-name-value{font-size:13px;font-weight:500;color:var(--text-muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .my-name-value.set{color:var(--text);}
@@ -263,14 +263,7 @@
         <button class="icon-btn" title="Выйти" onclick="document.getElementById('logout-confirm-input').value='';document.getElementById('logout-error').style.display='none';openModal('modal-logout')">⏻</button>
       </div>
     </div>
-    <div class="my-profile-bar" onclick="showSettings()" title="Открыть настройки профиля">
-      <div class="my-profile-avatar" id="sidebar-my-avatar"></div>
-      <div class="my-profile-info">
-        <div class="my-profile-name" id="sidebar-my-name">Настроить профиль</div>
-        <div class="my-profile-bio" id="sidebar-my-bio"></div>
-      </div>
-      <span class="edit-icon">⚙</span>
-    </div>
+
     <div id="notif-banner" class="notif-banner">
       <span>🔔</span>
       <span style="flex:1">Включить системные уведомления?</span>
@@ -590,7 +583,6 @@ function logout() {
 async function initApp() {
   applyTheme(LS.load('nxmsg_theme') || 'dark');
   loadLocalAliases();
-  updateMyProfileBar();
   showScreen('screen-app');
   await loadContactsFromServer();
   renderChatList();
@@ -599,14 +591,7 @@ async function initApp() {
   if (!dismissed) setTimeout(checkNotifPermission, 1500);
 }
 
-function updateMyProfileBar() {
-  const nameEl = document.getElementById('sidebar-my-name');
-  if (nameEl) nameEl.textContent = myName || 'Настроить профиль';
-  const bioEl = document.getElementById('sidebar-my-bio');
-  if (bioEl) bioEl.textContent = myBio || '';
-  const avEl = document.getElementById('sidebar-my-avatar');
-  if (avEl) setAvatarEl(avEl, avatarCache[myPublicCode] !== undefined ? avatarCache[myPublicCode] : null, myName || myPublicCode);
-}
+
 
 async function loadContactsFromServer() {
   try {
@@ -1223,7 +1208,6 @@ async function saveSettings() {
       if (data.ok) {
         myName = data.displayName; myBio = data.bio || '';
         LS.save('nxmsg_name', myName); LS.save('nxmsg_bio', myBio);
-        updateMyProfileBar();
         showToast('Профиль обновлён');
       } else { showToast(data.error || 'Ошибка'); return; }
     } catch { showToast('Ошибка сохранения'); return; }
