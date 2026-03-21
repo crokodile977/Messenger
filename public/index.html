@@ -208,6 +208,105 @@
   .notif-body{flex:1;min-width:0;}
   .notif-from{font-family:var(--mono);font-size:11px;color:var(--orange);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .notif-text{font-size:13px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+  /* ═══════════════════════════════════════════════════
+     MOBILE — экраны до 640px
+     Логика: sidebar и chat-area стоят рядом (flex row),
+     на мобиле каждый = 100vw. Переключение через translateX.
+  ═══════════════════════════════════════════════════ */
+  @media (max-width: 640px) {
+    /* Корень приложения — горизонтальный слайдер */
+    #screen-app {
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Обёртка сайдбара + чата — лента шириной 200vw */
+    .app-inner {
+      display: flex;
+      flex-direction: row;
+      width: 200vw;
+      height: 100vh;
+      transition: transform 0.28s cubic-bezier(0.4,0,0.2,1);
+    }
+    /* Когда открыт чат — сдвигаем на -100vw */
+    #screen-app.chat-open .app-inner { transform: translateX(-100vw); }
+
+    .sidebar {
+      width: 100vw;
+      min-width: 100vw;
+      height: 100vh;
+      border-right: none;
+    }
+
+    .chat-area {
+      width: 100vw;
+      min-width: 100vw;
+      height: 100vh;
+    }
+
+    /* Кнопка «назад» — видна только на мобиле */
+    .back-btn {
+      display: flex !important;
+    }
+
+    /* Немного увеличиваем touch-цели */
+    .icon-btn { width: 38px; height: 38px; font-size: 16px; }
+    .send-btn  { width: 44px; height: 44px; font-size: 18px; }
+    .attach-btn{ width: 44px; height: 44px; font-size: 20px; }
+    .chat-item { padding: 14px 16px; }
+
+    /* Шапка чата — компактнее */
+    .chat-header { padding: 10px 12px; gap: 10px; }
+
+    /* Поле ввода — чуть больший шрифт на мобиле */
+    .msg-input { font-size: 16px; } /* 16px — убирает авто-зум iOS Safari */
+
+    /* Сообщения — чуть шире пузырьки */
+    .msg { max-width: 85%; }
+
+    /* Модалки — полная ширина с отступом */
+    .modal { max-width: calc(100vw - 24px); padding: 20px; margin: 0 12px; }
+
+    /* Уведомления — растянуть на всю ширину */
+    .notif-container { left: 12px; right: 12px; }
+    .notif { min-width: 0; max-width: 100%; }
+
+    /* Лайтбокс — без боковых отступов */
+    .lightbox img { max-width: 100vw; max-height: 85vh; border-radius: 0; }
+
+    /* Превью картинок — шире */
+    .msg-img { max-width: 220px; }
+
+    /* Убираем отступы у badges */
+    .enc-badge { padding: 5px 12px; font-size: 9px; }
+
+    /* Настройки — прокручиваемый модал */
+    .modal-overlay { align-items: flex-end; }
+    .modal {
+      margin: 0;
+      max-width: 100vw;
+      border-radius: 12px 12px 0 0;
+      border-left: none; border-right: none; border-bottom: none;
+      max-height: 92vh;
+      overflow-y: auto;
+      animation: slideUp 0.25s ease;
+    }
+    @keyframes slideUp {
+      from { transform: translateY(100%); }
+      to   { transform: translateY(0); }
+    }
+
+    /* Auth экраны */
+    #screen-register .auth-box,
+    #screen-login .auth-box { padding: 0 20px; max-width: 100%; }
+    .welcome-actions { padding: 0 24px; max-width: 100%; }
+    .logo-mark { font-size: 36px; }
+  }
+
+  /* Кнопка «назад» скрыта на десктопе */
+  .back-btn { display: none; }
+
 </style>
 </head>
 <body>
@@ -253,6 +352,7 @@
 
 <!-- APP -->
 <div id="screen-app" class="screen">
+  <div class="app-inner">
   <div class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-logo">NX<span>MSG</span></div>
@@ -280,6 +380,7 @@
       <p>Выберите чат</p>
     </div>
     <div class="chat-header" id="chat-header">
+      <button class="back-btn icon-btn" title="Назад" onclick="closeChat()" style="margin-right:2px;">←</button>
       <div class="chat-avatar" id="chat-header-avatar" style="width:32px;height:32px;font-size:12px;border-radius:4px;background:var(--bg3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:700;color:var(--orange);flex-shrink:0;"></div>
       <div class="chat-header-info">
         <div class="chat-header-name" id="chat-header-name"></div>
@@ -297,6 +398,7 @@
       <button class="send-btn" onclick="sendMessage()">➤</button>
     </div>
   </div>
+  </div><!-- /.app-inner -->
 </div>
 
 <!-- QR Modal -->
@@ -861,6 +963,8 @@ async function openChat(code) {
   document.getElementById('chat-header').classList.add('visible');
   document.getElementById('enc-badge').classList.add('visible');
   document.getElementById('input-row').classList.add('visible');
+  // Mobile: slide to chat panel
+  document.getElementById('screen-app').classList.add('chat-open');
 
   const msgArea = document.getElementById('messages-area');
   msgArea.innerHTML = '';
@@ -893,6 +997,11 @@ async function openChat(code) {
 
   // Notify recipient
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type:'start_chat', to:code }));
+}
+
+function closeChat() {
+  document.getElementById('screen-app').classList.remove('chat-open');
+  activeChat = null;
 }
 
 function updateChatHeader(code) {
