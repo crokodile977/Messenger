@@ -160,14 +160,21 @@
   .my-avatar-box{width:52px;height:52px;border-radius:var(--radius);background:var(--bg3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:18px;font-weight:700;color:var(--orange);overflow:hidden;cursor:pointer;}
   .my-avatar-box:hover::after{content:'✎';position:absolute;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;font-size:18px;color:#fff;}
   .avatar-edit-hint{font-family:var(--mono);font-size:10px;color:var(--text-muted);text-align:center;}
-  .file-bubble{display:flex;align-items:center;gap:10px;padding:10px 14px;min-width:180px;}
+  .file-bubble{display:flex;align-items:center;gap:10px;padding:10px 14px;min-width:160px;max-width:260px;}
   .file-icon{font-size:22px;flex-shrink:0;}
   .file-info{flex:1;min-width:0;}
-  .file-name{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .file-name{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;}
   .file-size{font-family:var(--mono);font-size:10px;opacity:0.7;margin-top:2px;}
-  .file-dl{background:rgba(0,0,0,0.2);border:none;border-radius:2px;color:inherit;font-family:var(--mono);font-size:10px;font-weight:700;padding:3px 8px;cursor:pointer;white-space:nowrap;margin-top:4px;display:inline-block;text-decoration:none;}
-  .msg.mine .file-dl{background:rgba(0,0,0,0.25);color:#000;}
-  .msg.theirs .file-dl{background:rgba(255,92,0,0.15);color:var(--orange);}
+  .file-dl{width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.18);border:none;border-radius:50%;cursor:pointer;text-decoration:none;flex-shrink:0;transition:background 0.15s;color:inherit;padding:0;}
+  .file-dl svg{width:16px;height:16px;}
+  .file-dl:hover{background:rgba(0,0,0,0.35);}
+  .msg.mine .file-dl{background:rgba(0,0,0,0.22);color:#000;}
+  .msg.mine .file-dl:hover{background:rgba(0,0,0,0.38);}
+  .msg.theirs .file-dl{background:rgba(255,92,0,0.12);color:var(--orange);}
+  .msg.theirs .file-dl:hover{background:rgba(255,92,0,0.25);}
+  .img-dl{width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);border-radius:50%;text-decoration:none;color:#fff;flex-shrink:0;transition:background 0.15s;}
+  .img-dl svg{width:14px;height:14px;}
+  .img-dl:hover{background:rgba(0,0,0,0.65);}
 
   /* Modals */
   .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.8);backdrop-filter:blur(4px);z-index:100;align-items:center;justify-content:center;}
@@ -1053,18 +1060,16 @@ function appendMessage(m) {
       img.src = m.fileData; // data: URL — safe, no user HTML injected
       img.alt = m.fileName || 'изображение';
       img.onclick = () => openLightbox(m.fileData);
-      // Show filename + download below image
-      const imgInfo = document.createElement('div');
-      imgInfo.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:4px 6px 2px;gap:8px;';
-      const imgName = document.createElement('span');
-      imgName.style.cssText = 'font-size:11px;opacity:0.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-      imgName.textContent = m.fileName || '';
+      // Кнопка скачать — поверх картинки в правом нижнем углу
+      const imgWrap = document.createElement('div');
+      imgWrap.style.cssText = 'position:relative;display:inline-block;';
       const imgDl = document.createElement('a');
+      imgDl.className = 'img-dl';
       imgDl.href = m.fileData; imgDl.download = m.fileName || 'image';
-      imgDl.style.cssText = 'font-size:11px;opacity:0.7;flex-shrink:0;color:inherit;text-decoration:none;';
-      imgDl.textContent = '⬇';
-      imgInfo.appendChild(imgName); imgInfo.appendChild(imgDl);
-      bubble.appendChild(img); bubble.appendChild(imgInfo);
+      imgDl.style.cssText = imgDl.style.cssText + ';position:absolute;bottom:8px;right:8px;';
+      imgDl.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><line x1="12" y1="4" x2="12" y2="16"/><polyline points="8 12 12 16 16 12"/><line x1="5" y1="20" x2="19" y2="20"/><line x1="5" y1="20" x2="5" y2="16"/><line x1="19" y1="20" x2="19" y2="16"/></svg>';
+      imgWrap.appendChild(img); imgWrap.appendChild(imgDl);
+      bubble.appendChild(imgWrap);
     } else {
       // Non-image file card
       bubble.className = 'msg-bubble file-bubble';
@@ -1081,7 +1086,7 @@ function appendMessage(m) {
       fsize.textContent = formatBytes(m.fileSize || 0);
       const dl = document.createElement('a');
       dl.className = 'file-dl';
-      dl.textContent = '⬇ Скачать';
+      dl.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><line x1="12" y1="4" x2="12" y2="16"/><polyline points="8 12 12 16 16 12"/><line x1="5" y1="20" x2="19" y2="20"/><line x1="5" y1="20" x2="5" y2="16"/><line x1="19" y1="20" x2="19" y2="16"/></svg>';
       dl.href = m.fileData; dl.download = m.fileName || 'file';
       info.appendChild(fname); info.appendChild(fsize); info.appendChild(dl);
       bubble.appendChild(icon); bubble.appendChild(info);
@@ -1501,7 +1506,9 @@ document.addEventListener('webkitfullscreenchange', () => {
 });
 
 function isMobile() {
-  return window.innerWidth <= 900 || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  // Только настоящие мобильные устройства — не ПК с узким окном
+  return ('ontouchstart' in window || navigator.maxTouchPoints > 1)
+    && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 }
 
 // ─── BOOT ────────────────────────────────────────────
