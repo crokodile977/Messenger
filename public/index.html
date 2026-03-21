@@ -965,7 +965,7 @@ function showMyQR() {
   canvas.width = 200; canvas.height = 200;
   QRCode.toCanvas(canvas, myPublicCode, {
     width: 200, margin: 2,
-    color: { dark: '#FF5C00', light: '#111111' },
+    color: { dark: '#000000', light: '#ffffff' },
     errorCorrectionLevel: 'M'
   }, err => {
     if (err) {
