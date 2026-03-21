@@ -11,6 +11,33 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 app.use(express.json());
+
+// PWA icons (generated SVG rendered as PNG via browser)
+// We serve SVG with correct MIME so browsers accept it as icon
+const ICON_SVG = (size) => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+  <rect width="${size}" height="${size}" rx="${size*0.18}" fill="#0a0a0a"/>
+  <rect width="${size}" height="${size}" rx="${size*0.18}" fill="url(#g)"/>
+  <defs><radialGradient id="g" cx="50%" cy="40%" r="60%"><stop offset="0%" stop-color="#FF5C00" stop-opacity="0.15"/><stop offset="100%" stop-color="#0a0a0a" stop-opacity="0"/></radialGradient></defs>
+  <text x="${size/2}" y="${size*0.62}" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="${size*0.38}" fill="#f0f0f0">NX</text>
+  <text x="${size/2}" y="${size*0.88}" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="${size*0.28}" fill="#FF5C00">MSG</text>
+</svg>`;
+
+app.get('/icon-192.png', (req, res) => {
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.send(ICON_SVG(192));
+});
+app.get('/icon-512.png', (req, res) => {
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.send(ICON_SVG(512));
+});
+// apple touch icon
+app.get('/apple-touch-icon.png', (req, res) => {
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.send(ICON_SVG(180));
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.use((req, res, next) => {
