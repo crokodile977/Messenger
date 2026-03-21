@@ -21,46 +21,111 @@ app.use((req, res, next) => {
   next();
 });
 
-// ─── PERSISTENCE ────────────────────────────────────────
-const DATA_DIR = path.join(__dirname, 'data');
-const USERS_FILE    = path.join(DATA_DIR, 'users.json');
-const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
-const PUBCODES_FILE = path.join(DATA_DIR, 'pubcodes.json');
+// ─── DATABASE (PostgreSQL) ──────────────────────────────
+const { Pool } = require('pg');
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+// DATABASE_URL is set automatically by Render when you attach a PostgreSQL database.
+// For local dev, set it in .env or environment: DATABASE_URL=postgresql://user:pass@host/db
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('render.com')
+    ? { rejectUnauthorized: false }
+    : false
+});
 
-function loadJSON(file) {
-  try {
-    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (e) { console.error('Load error', file, e.message); }
-  return {};
-}
-
-function debounceWrite(file, getData, timers) {
-  clearTimeout(timers[file]);
-  timers[file] = setTimeout(() => {
-    try { fs.writeFileSync(file, JSON.stringify(getData()), 'utf8'); }
-    catch (e) { console.error('Write error', file, e.message); }
-  }, 300);
-}
-
-const _timers = {};
-const saveUsers    = () => debounceWrite(USERS_FILE,    () => Object.fromEntries(users),    _timers);
-const saveMessages = () => debounceWrite(MESSAGES_FILE, () => Object.fromEntries(messages), _timers);
-const savePubcodes = () => debounceWrite(PUBCODES_FILE, () => Object.fromEntries(pubcodes), _timers);
-
-// In-memory stores
-// users    : userId  -> { id, passwordHash, displayName, registeredAt, publicCode }
-// pubcodes : publicCode -> userId   (reverse lookup)
+// In-memory cache (populated from DB on startup, kept in sync on writes)
+// users    : userId  -> { id, passwordHash, displayName, bio, avatar, registeredAt, publicCode }
+// pubcodes : publicCode -> userId
 // messages : convKey -> [{ id, from, to, encrypted, timestamp }]
-const users    = new Map(Object.entries(loadJSON(USERS_FILE)));
-const pubcodes = new Map(Object.entries(loadJSON(PUBCODES_FILE)));
-const messages = new Map(Object.entries(loadJSON(MESSAGES_FILE)));
-const wsClients = new Map();   // userId -> ws  (runtime only)
-// Session tokens: token -> { userId, expiresAt }
+const users    = new Map();
+const pubcodes = new Map();
+const messages = new Map();
+const wsClients = new Map();
 const sessions = new Map();
 
-console.log(`📂 Loaded ${users.size} users, ${messages.size} conversations`);
+// ── Schema init ──────────────────────────────────────────
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id            TEXT PRIMARY KEY,
+      public_code   TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      display_name  TEXT NOT NULL DEFAULT '',
+      bio           TEXT NOT NULL DEFAULT '',
+      avatar        TEXT,
+      registered_at BIGINT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS messages (
+      id        TEXT PRIMARY KEY,
+      conv_key  TEXT NOT NULL,
+      from_id   TEXT NOT NULL,
+      to_id     TEXT NOT NULL,
+      encrypted TEXT NOT NULL,
+      ts        BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS messages_conv_key ON messages(conv_key, ts);
+  `);
+}
+
+// ── Load all data into memory on startup ─────────────────
+async function loadFromDB() {
+  const { rows: uRows } = await pool.query('SELECT * FROM users');
+  for (const r of uRows) {
+    const u = { id: r.id, publicCode: r.public_code, passwordHash: r.password_hash,
+      displayName: r.display_name, bio: r.bio || '', avatar: r.avatar || null,
+      registeredAt: Number(r.registered_at) };
+    users.set(r.id, u);
+    pubcodes.set(r.public_code, r.id);
+  }
+  const { rows: mRows } = await pool.query('SELECT * FROM messages ORDER BY ts ASC');
+  for (const r of mRows) {
+    const key = r.conv_key;
+    if (!messages.has(key)) messages.set(key, []);
+    messages.get(key).push({ id: r.id, from: r.from_id, to: r.to_id, encrypted: r.encrypted, timestamp: Number(r.ts) });
+  }
+  console.log(`✅ Loaded ${users.size} users, ${messages.size} conversations from DB`);
+}
+
+// ── Persist helpers (write-through: update cache then DB) ─
+
+async function saveUser(u) {
+  users.set(u.id, u);
+  pubcodes.set(u.publicCode, u.id);
+  await pool.query(`
+    INSERT INTO users (id, public_code, password_hash, display_name, bio, avatar, registered_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7)
+    ON CONFLICT (id) DO UPDATE SET
+      display_name = EXCLUDED.display_name,
+      bio          = EXCLUDED.bio,
+      avatar       = EXCLUDED.avatar,
+      password_hash= EXCLUDED.password_hash
+  `, [u.id, u.publicCode, u.passwordHash, u.displayName || '', u.bio || '', u.avatar || null, u.registeredAt]);
+}
+
+// Debounce avatar saves (avatars are big base64 strings)
+const _avatarTimers = {};
+function saveUserAvatar(u) {
+  users.set(u.id, u);
+  clearTimeout(_avatarTimers[u.id]);
+  _avatarTimers[u.id] = setTimeout(() => {
+    pool.query('UPDATE users SET avatar=$1 WHERE id=$2', [u.avatar || null, u.id])
+      .catch(e => console.error('avatar save error:', e.message));
+  }, 500);
+}
+
+async function saveMessage(convKey, msgObj) {
+  if (!messages.has(convKey)) messages.set(convKey, []);
+  messages.get(convKey).push(msgObj);
+  await pool.query(`
+    INSERT INTO messages (id, conv_key, from_id, to_id, encrypted, ts)
+    VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING
+  `, [msgObj.id, convKey, msgObj.from, msgObj.to, msgObj.encrypted, msgObj.timestamp]);
+}
+
+// Legacy no-ops (code still calls these in some places — safe to ignore)
+const saveUsers    = () => {};
+const saveMessages = () => {};
+const savePubcodes = () => {};
 
 // ─── HELPERS ────────────────────────────────────────────
 
@@ -170,10 +235,7 @@ app.post('/api/register', async (req, res) => {
     ? displayName.replace(/[<>&"'`\/=]/g, '').trim().slice(0, 32)
     : '';
 
-  users.set(userId, { id: userId, passwordHash, displayName: safeName, registeredAt: Date.now(), publicCode });
-  pubcodes.set(publicCode, userId);
-  saveUsers();
-  savePubcodes();
+  await saveUser({ id: userId, passwordHash, displayName: safeName, bio: '', avatar: null, registeredAt: Date.now(), publicCode });
 
   const token = generateSessionToken();
   sessions.set(token, { userId, expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 }); // 30 days
@@ -235,7 +297,7 @@ app.get('/api/user/bycode/:code', (req, res) => {
 });
 
 // Update display name (authenticated)
-app.patch('/api/user/name', (req, res) => {
+app.patch('/api/user/name', async (req, res) => {
   const userId = resolveSession(req.body.token);
   if (!userId || !users.has(userId)) return res.status(401).json({ error: 'Unauthorized' });
   const { name } = req.body;
@@ -243,9 +305,8 @@ app.patch('/api/user/name', (req, res) => {
   const safeName = name.replace(/[<>&"'`\/=]/g, '').trim().slice(0, 32);
   const { bio } = req.body;
   const safeBio = typeof bio === 'string' ? bio.replace(/[<>&"']/g, '').trim().slice(0, 80) : users.get(userId).bio || '';
-  users.get(userId).displayName = safeName;
-  users.get(userId).bio = safeBio;
-  saveUsers();
+  const updatedUser = { ...users.get(userId), displayName: safeName, bio: safeBio };
+  await saveUser(updatedUser);
   // Broadcast name change
   for (const [key] of messages) {
     const [a, b] = key.split('::');
@@ -260,7 +321,7 @@ app.patch('/api/user/name', (req, res) => {
 });
 
 // Upload / update avatar
-app.post('/api/user/avatar', (req, res) => {
+app.post('/api/user/avatar', async (req, res) => {
   const userId = resolveSession(req.body.token);
   if (!userId || !users.has(userId)) return res.status(401).json({ error: 'Unauthorized' });
   const { avatar } = req.body;
@@ -269,8 +330,8 @@ app.post('/api/user/avatar', (req, res) => {
   if (!avatar.startsWith('data:image/')) return res.status(400).json({ error: 'Must be an image' });
   // ~2 MB limit on base64 string (~2.7 MB raw) 
   if (avatar.length > 3 * 1024 * 1024) return res.status(400).json({ error: 'Image too large (max 2 MB)' });
-  users.get(userId).avatar = avatar;
-  saveUsers();
+  const userWithAvatar = { ...users.get(userId), avatar };
+  saveUserAvatar(userWithAvatar);
   // Notify contacts of avatar update
   for (const [key] of messages) {
     const [a, b] = key.split('::');
@@ -285,11 +346,11 @@ app.post('/api/user/avatar', (req, res) => {
 });
 
 // Delete avatar
-app.delete('/api/user/avatar', (req, res) => {
+app.delete('/api/user/avatar', async (req, res) => {
   const userId = resolveSession(req.body.token);
   if (!userId || !users.has(userId)) return res.status(401).json({ error: 'Unauthorized' });
-  delete users.get(userId).avatar;
-  saveUsers();
+  const userNoAvatar = { ...users.get(userId), avatar: null };
+  saveUserAvatar(userNoAvatar);
   res.json({ ok: true });
 });
 
@@ -359,7 +420,7 @@ app.post('/api/messages', (req, res) => {
 wss.on('connection', (ws) => {
   let userId = null; // internal ID — resolved from session token
 
-  ws.on('message', (rawData) => {
+  ws.on('message', async (rawData) => {
     let msg;
     try { msg = JSON.parse(rawData.toString()); }
     catch { ws.send(JSON.stringify({ type: 'error', error: 'Invalid format' })); return; }
@@ -395,9 +456,7 @@ wss.on('connection', (ws) => {
         const msgObj = { id: crypto.randomUUID(), from: userId, to: toId, encrypted, timestamp: Date.now() };
         const convKey = getConvKey(userId, toId);
         const isFirst = !messages.has(convKey) || !messages.get(convKey).length;
-        if (!messages.has(convKey)) messages.set(convKey, []);
-        messages.get(convKey).push(msgObj);
-        saveMessages();
+        await saveMessage(convKey, msgObj);
 
         const senderUser = users.get(userId);
         const recipientWs = wsClients.get(toId);
@@ -499,4 +558,13 @@ function broadcastOnlineStatus(userId, online) {
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🔒 NXMSG running on http://localhost:${PORT}`));
+(async () => {
+  try {
+    await initDB();
+    await loadFromDB();
+  } catch (e) {
+    console.error('DB init failed:', e.message);
+    console.error('Running without persistent DB (data will be lost on restart)');
+  }
+  server.listen(PORT, () => console.log(`🔒 NXMSG running on http://localhost:${PORT}`));
+})();
