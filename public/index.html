@@ -72,6 +72,8 @@
 
   /* App */
   #screen-app{flex-direction:row;height:100vh;}
+  /* app-inner — на десктопе просто flex-контейнер, растянутый на весь экран */
+  .app-inner{display:flex;flex-direction:row;flex:1;min-width:0;height:100vh;overflow:hidden;}
   .sidebar{width:280px;min-width:280px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;height:100vh;}
   .sidebar-header{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px;}
   .sidebar-logo{font-family:var(--mono);font-size:16px;font-weight:700;letter-spacing:-1px;}
