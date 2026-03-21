@@ -260,18 +260,16 @@
         <button class="icon-btn" title="Мой QR-код" onclick="showMyQR()">▣</button>
         <button class="icon-btn" title="Новый чат" onclick="showNewChat()">＋</button>
         <button class="icon-btn" title="Настройки" onclick="showSettings()">⚙</button>
-        <button class="icon-btn" title="Выйти" onclick="logout()">⏻</button>
+        <button class="icon-btn" title="Выйти" onclick="document.getElementById('logout-confirm-input').value='';document.getElementById('logout-error').style.display='none';openModal('modal-logout')">⏻</button>
       </div>
     </div>
-    <div class="my-code-bar">
-      <span class="my-code-label">Код:</span>
-      <span class="my-code-value" id="sidebar-my-code" onclick="copyMyCode()" title="Нажмите чтобы скопировать"></span>
-      <button class="copy-btn" onclick="copyMyCode()" title="Скопировать">⧉</button>
-    </div>
-    <div class="my-name-bar" onclick="showSettings()" title="Настроить имя">
-      <span class="my-name-label">Имя:</span>
-      <span class="my-name-value" id="sidebar-my-name">Нажмите чтобы задать имя</span>
-      <span class="edit-icon">✎</span>
+    <div class="my-profile-bar" onclick="showSettings()" title="Открыть настройки профиля">
+      <div class="my-profile-avatar" id="sidebar-my-avatar"></div>
+      <div class="my-profile-info">
+        <div class="my-profile-name" id="sidebar-my-name">Настроить профиль</div>
+        <div class="my-profile-bio" id="sidebar-my-bio"></div>
+      </div>
+      <span class="edit-icon">⚙</span>
     </div>
     <div id="notif-banner" class="notif-banner">
       <span>🔔</span>
@@ -292,8 +290,9 @@
       <div class="chat-avatar" id="chat-header-avatar" style="width:32px;height:32px;font-size:12px;border-radius:4px;background:var(--bg3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:700;color:var(--orange);flex-shrink:0;"></div>
       <div class="chat-header-info">
         <div class="chat-header-name" id="chat-header-name"></div>
-        <div class="chat-header-code" id="chat-header-code"></div>
+        <div class="chat-header-code" id="chat-header-bio"></div>
       </div>
+      <button class="icon-btn" title="Переименовать собеседника" onclick="showRenameContact()" style="flex-shrink:0;">✎</button>
       <div class="chat-header-status" id="chat-header-status"><div class="dot"></div><span>оффлайн</span></div>
     </div>
     <div class="enc-badge" id="enc-badge"><span>🔒</span> Сквозное шифрование AES-256-GCM</div>
@@ -361,6 +360,17 @@
       <input type="text" id="settings-name-input" class="input" placeholder="Введите имя (до 32 символов)..." maxlength="32" autocomplete="off">
     </div>
     <div class="setting-row">
+      <div class="setting-label">Описание профиля</div>
+      <input type="text" id="settings-bio-input" class="input" placeholder="Пару слов о себе (до 80 символов)..." maxlength="80" autocomplete="off">
+    </div>
+    <div class="setting-row">
+      <div class="setting-label">Ваш публичный код</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="input" id="settings-code-display" style="flex:1;letter-spacing:3px;font-weight:700;color:var(--orange);cursor:default;user-select:all;"></span>
+        <button class="btn btn-ghost" style="padding:10px 14px;font-size:12px;flex-shrink:0;" onclick="copyMyCode();showToast('Код скопирован')">⧉ Копировать</button>
+      </div>
+    </div>
+    <div class="setting-row">
       <div class="setting-label">Системные уведомления</div>
       <div class="notif-status"><div class="notif-status-dot" id="notif-status-dot"></div><span id="notif-status-text">...</span></div>
       <button class="btn btn-ghost" id="notif-request-btn" onclick="requestNotifPermission()" style="display:none">🔔 Включить уведомления</button>
@@ -373,6 +383,31 @@
       </div>
     </div>
     <button class="btn btn-primary" onclick="saveSettings()">Сохранить</button>
+  </div>
+</div>
+
+<!-- Rename Contact Modal -->
+<div class="modal-overlay" id="modal-rename">
+  <div class="modal">
+    <div class="modal-title">Переименовать собеседника <button class="modal-close" onclick="closeModal('modal-rename')">✕</button></div>
+    <div style="font-size:12px;color:var(--text-muted);font-family:var(--mono);">Это имя видите только вы — собеседник не узнает</div>
+    <input type="text" id="rename-input" class="input" placeholder="Ваше название для этого контакта..." maxlength="32" autocomplete="off">
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-primary" style="flex:1" onclick="saveRenameContact()">Сохранить</button>
+      <button class="btn btn-ghost" onclick="clearRenameContact()" title="Сбросить на имя от собеседника">Сбросить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Logout Confirm Modal -->
+<div class="modal-overlay" id="modal-logout">
+  <div class="modal">
+    <div class="modal-title">Выход из аккаунта <button class="modal-close" onclick="closeModal('modal-logout')">✕</button></div>
+    <div style="font-size:13px;color:var(--text-dim);line-height:1.6;">Для подтверждения введите ваше имя профиля.<br>Если имя не задано — оставьте поле пустым.</div>
+    <input type="text" id="logout-confirm-input" class="input" placeholder="Ваше имя..." maxlength="32" autocomplete="off">
+    <div id="logout-error" style="font-size:12px;color:#ff4444;display:none;font-family:var(--mono);"></div>
+    <button class="btn btn-primary" style="background:#cc2200;" onclick="confirmLogout()">Выйти из аккаунта</button>
+    <button class="btn btn-ghost" onclick="closeModal('modal-logout')">Отмена</button>
   </div>
 </div>
 
@@ -395,10 +430,13 @@ const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.ho
 let myToken = null;
 let myPublicCode = null;
 let myName = '';
+let myBio = '';
 let ws = null;
 let activeChat = null; // publicCode of open chat
 let chats = {};        // publicCode -> { messages:[], unread:0, online:false, name:'', _lastPreview }
-const contactNames = {};
+const contactNames = {}; // publicCode -> displayName (от сервера)
+const contactBios = {};  // publicCode -> bio (от сервера)
+const localAliases = {}; // publicCode -> alias (только локально, только для себя)
 let pingInterval = null;
 let scanStream = null;
 let scanAnimFrame = null;
@@ -417,7 +455,7 @@ function saveSession() {
   LS.save('nxmsg_name',  myName);
 }
 function clearSession() {
-  ['nxmsg_token','nxmsg_code','nxmsg_name'].forEach(k => LS.del(k));
+  ['nxmsg_token','nxmsg_code','nxmsg_name','nxmsg_bio'].forEach(k => LS.del(k));
 }
 
 // ─── SCREEN ──────────────────────────────────────────
@@ -551,8 +589,8 @@ function logout() {
 // ─── INIT APP ────────────────────────────────────────
 async function initApp() {
   applyTheme(LS.load('nxmsg_theme') || 'dark');
-  document.getElementById('sidebar-my-code').textContent = myPublicCode;
-  updateMyNameBar();
+  loadLocalAliases();
+  updateMyProfileBar();
   showScreen('screen-app');
   await loadContactsFromServer();
   renderChatList();
@@ -561,10 +599,13 @@ async function initApp() {
   if (!dismissed) setTimeout(checkNotifPermission, 1500);
 }
 
-function updateMyNameBar() {
-  const el = document.getElementById('sidebar-my-name');
-  if (myName) { el.textContent = myName; el.classList.add('set'); }
-  else { el.textContent = 'Нажмите чтобы задать имя'; el.classList.remove('set'); }
+function updateMyProfileBar() {
+  const nameEl = document.getElementById('sidebar-my-name');
+  if (nameEl) nameEl.textContent = myName || 'Настроить профиль';
+  const bioEl = document.getElementById('sidebar-my-bio');
+  if (bioEl) bioEl.textContent = myBio || '';
+  const avEl = document.getElementById('sidebar-my-avatar');
+  if (avEl) setAvatarEl(avEl, avatarCache[myPublicCode] !== undefined ? avatarCache[myPublicCode] : null, myName || myPublicCode);
 }
 
 async function loadContactsFromServer() {
@@ -578,6 +619,7 @@ async function loadContactsFromServer() {
         chats[c.publicCode] = { messages:[], unread:0, online:false, name:c.displayName||'' };
       } else if (c.displayName) chats[c.publicCode].name = c.displayName;
       if (c.displayName) contactNames[c.publicCode] = c.displayName;
+      if (c.bio) { contactBios[c.publicCode] = c.bio; if (chats[c.publicCode]) chats[c.publicCode].bio = c.bio; }
       if (c.lastText && !chats[c.publicCode].messages.length) {
         chats[c.publicCode]._lastPreview = { text:c.lastText, timestamp:c.lastTimestamp, mine:c.lastFrom==='me' };
       }
@@ -635,9 +677,14 @@ function handleMsg(msg) {
       const ts   = Number(msg.timestamp) || Date.now();
       if (!from || !text) return;
       const fromName = String(msg.fromName || '');
-      if (!chats[from]) chats[from] = { messages:[], unread:0, online:true, name:fromName };
-      else if (fromName && !chats[from].name) chats[from].name = fromName;
+      const fromBio  = String(msg.fromBio  || '');
+      if (!chats[from]) chats[from] = { messages:[], unread:0, online:true, name:fromName, bio:fromBio };
+      else {
+        if (fromName && !chats[from].name) chats[from].name = fromName;
+        if (fromBio  && !chats[from].bio)  chats[from].bio  = fromBio;
+      }
       if (fromName) contactNames[from] = fromName;
+      if (fromBio)  contactBios[from]  = fromBio;
       const obj = { id: String(msg.id||''), from, text, timestamp:ts, mine:false };
       chats[from].messages.push(obj);
       if (activeChat === from) { appendMessage(obj); scrollToBottom(); }
@@ -738,9 +785,19 @@ function setAvatarEl(el, dataUrl, name) {
 }
 
 function getDisplayName(code) {
+  if (localAliases[code]) return localAliases[code];
   if (contactNames[code]) return contactNames[code];
   if (chats[code]?.name) return chats[code].name;
   return code;
+}
+function loadLocalAliases() {
+  try {
+    const raw = LS.load('nxmsg_aliases');
+    if (raw) Object.assign(localAliases, JSON.parse(raw));
+  } catch {}
+}
+function saveLocalAliases() {
+  try { LS.save('nxmsg_aliases', JSON.stringify(localAliases)); } catch {}
 }
 
 function renderChatList() {
@@ -787,13 +844,10 @@ function renderChatList() {
     const nameEl = document.createElement('div');
     nameEl.className = 'chat-name';
     nameEl.textContent = dname;
-    const codeEl = document.createElement('div');
-    codeEl.className = 'chat-code';
-    codeEl.textContent = code;
     const lastEl = document.createElement('div');
     lastEl.className = 'chat-last';
     lastEl.textContent = preview ? (preview.mine ? '▶ '+preview.text : preview.text) : '';
-    info.appendChild(nameEl); info.appendChild(codeEl); info.appendChild(lastEl);
+    info.appendChild(nameEl); info.appendChild(lastEl);
 
     const meta = document.createElement('div');
     meta.className = 'chat-meta';
@@ -847,6 +901,7 @@ async function openChat(code) {
     if (chats[code]) {
       chats[code].online = data.online||false;
       if (data.displayName) { chats[code].name = data.displayName; contactNames[code] = data.displayName; }
+      if (data.bio) { chats[code].bio = data.bio; contactBios[code] = data.bio; }
     }
     updateChatHeader(code);
   } catch {}
@@ -858,7 +913,9 @@ async function openChat(code) {
 function updateChatHeader(code) {
   const dname = getDisplayName(code);
   document.getElementById('chat-header-name').textContent = dname;
-  document.getElementById('chat-header-code').textContent = code;
+  const contactBio = chats[code]?.bio || contactBios[code] || '';
+  const bioEl = document.getElementById('chat-header-bio');
+  if (bioEl) bioEl.textContent = contactBio;
   const av = document.getElementById('chat-header-avatar');
   av.dataset.avatar = code;
   setAvatarEl(av, avatarCache[code] !== undefined ? avatarCache[code] : null, dname);
@@ -1084,6 +1141,9 @@ function stopScan() {
 // ─── SETTINGS ────────────────────────────────────────
 function showSettings() {
   document.getElementById('settings-name-input').value = myName;
+  document.getElementById('settings-bio-input').value = myBio;
+  const codeDisplay = document.getElementById('settings-code-display');
+  if (codeDisplay) codeDisplay.textContent = myPublicCode || '';
   updateNotifStatusUI();
   const t = LS.load('nxmsg_theme') || 'dark';
   document.getElementById('theme-dark-btn')?.classList.toggle('active', t === 'dark');
@@ -1152,16 +1212,68 @@ function resizeImage(dataUrl, maxSize) {
 }
 async function saveSettings() {
   const newName = document.getElementById('settings-name-input').value.trim().slice(0,32);
-  if (newName !== myName) {
+  const newBio  = document.getElementById('settings-bio-input').value.trim().slice(0,80);
+  const nameChanged = newName !== myName;
+  const bioChanged  = newBio !== myBio;
+  if (nameChanged || bioChanged) {
     try {
       const res = await fetch('/api/user/name', { method:'PATCH', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ token: myToken, name: newName }) });
+        body: JSON.stringify({ token: myToken, name: newName, bio: newBio }) });
       const data = await res.json();
-      if (data.ok) { myName = data.displayName; LS.save('nxmsg_name', myName); updateMyNameBar(); showToast('Имя обновлено'); }
-      else { showToast(data.error || 'Ошибка'); return; }
+      if (data.ok) {
+        myName = data.displayName; myBio = data.bio || '';
+        LS.save('nxmsg_name', myName); LS.save('nxmsg_bio', myBio);
+        updateMyProfileBar();
+        showToast('Профиль обновлён');
+      } else { showToast(data.error || 'Ошибка'); return; }
     } catch { showToast('Ошибка сохранения'); return; }
   }
   closeModal('modal-settings');
+}
+
+// ─── RENAME CONTACT ──────────────────────────────────
+function showRenameContact() {
+  if (!activeChat) return;
+  const current = localAliases[activeChat] || '';
+  document.getElementById('rename-input').value = current;
+  openModal('modal-rename');
+}
+function saveRenameContact() {
+  if (!activeChat) return;
+  const alias = document.getElementById('rename-input').value.trim().slice(0,32);
+  if (alias) localAliases[activeChat] = alias;
+  else delete localAliases[activeChat];
+  saveLocalAliases();
+  closeModal('modal-rename');
+  renderChatList();
+  updateChatHeader(activeChat);
+  showToast(alias ? 'Имя сохранено' : 'Имя сброшено');
+}
+function clearRenameContact() {
+  if (!activeChat) return;
+  delete localAliases[activeChat];
+  saveLocalAliases();
+  document.getElementById('rename-input').value = '';
+  closeModal('modal-rename');
+  renderChatList();
+  updateChatHeader(activeChat);
+  showToast('Имя сброшено');
+}
+
+// ─── LOGOUT CONFIRM ───────────────────────────────────
+function confirmLogout() {
+  const input = document.getElementById('logout-confirm-input').value.trim();
+  const errEl = document.getElementById('logout-error');
+  const expected = myName || '';
+  if (input !== expected) {
+    errEl.textContent = expected ? 'Неверное имя. Введите: ' + expected : 'Поле должно быть пустым';
+    errEl.style.display = 'block';
+    return;
+  }
+  errEl.style.display = 'none';
+  document.getElementById('logout-confirm-input').value = '';
+  closeModal('modal-logout');
+  logout();
 }
 
 // ─── THEME ───────────────────────────────────────────
@@ -1292,6 +1404,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         myToken = token;
         myPublicCode = data.publicCode || code;
         myName = data.displayName || LS.load('nxmsg_name') || '';
+        myBio  = data.bio || LS.load('nxmsg_bio') || '';
         saveSession();
         initApp(); return;
       }
