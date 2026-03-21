@@ -22,15 +22,44 @@
     --online:#22cc66; --radius:4px;
   }
   body.light {
-    --bg:#f5f5f5; --bg2:#ffffff; --bg3:#eeeeee; --border:#ddd;
-    --orange:#E85000; --orange-glow:rgba(232,80,0,0.10); --orange-glow2:rgba(232,80,0,0.05);
-    --text:#111111; --text-dim:#555; --text-muted:#aaa;
-    --online:#18a050;
+    --bg:#eef0f4;       /* фон чата — чуть серее чтобы выделялись пузырьки */
+    --bg2:#ffffff;      /* сайдбар, шапки, поле ввода */
+    --bg3:#d6dbe5;      /* пузырьки чужих сообщений — заметно темнее фона */
+    --border:#c8cdd8;   /* бордеры — достаточно тёмные */
+    --orange:#D44800;
+    --orange-glow:rgba(212,72,0,0.12);
+    --orange-glow2:rgba(212,72,0,0.06);
+    --text:#111827;     /* почти чёрный */
+    --text-dim:#4b5563;
+    --text-muted:#9ca3af;
+    --online:#16a34a;
   }
+  /* Светлая тема — точечные переопределения для читаемости */
+  body.light .msg.theirs .msg-bubble { background: #ffffff; border: 1px solid #d1d5db; color: #111111; }
+  body.light .msg.mine .msg-bubble   { background: var(--orange); color: #ffffff; }
+  body.light .messages-area          { background: #f0f2f5; }
+  body.light .chat-area              { background: #f0f2f5; }
+  body.light .chat-placeholder       { background: #f0f2f5; }
+  body.light .input-row              { background: #ffffff; border-top: 1px solid #d1d5db; }
+  body.light .msg-input              { background: #f0f2f5; border-color: #d1d5db; color: #111111; }
+  body.light .msg-input:focus        { border-color: var(--orange); }
+  body.light .enc-badge              { background: #ffffff; }
+  body.light .chat-header            { background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  body.light .sidebar                { background: #ffffff; border-right: 1px solid #d1d5db; }
+  body.light .sidebar-header         { background: #ffffff; }
+  body.light .chat-item:hover        { background: #f3f4f6; }
+  body.light .chat-item.active       { background: rgba(232,80,0,0.08); }
+  body.light .msg-time               { color: #9ca3af; }
+  body.light .notif-status           { background: #f3f4f6; border-color: #d1d5db; }
+  body.light .modal                  { background: #ffffff; border-color: #d1d5db; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
+  body.light .input                  { background: #f9fafb; border-color: #d1d5db; }
+  body.light .btn-ghost              { border-color: #d1d5db; color: #4b5563; }
+  body.light .btn-ghost:hover        { border-color: var(--orange); color: var(--orange); }
+  body.light .msg.mine .file-dl      { color: #ffffff; }
   *{margin:0;padding:0;box-sizing:border-box;}
-  body{background:var(--bg);color:var(--text);font-family:var(--sans);height:100vh;overflow:hidden;display:flex;flex-direction:column;}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);height:100vh;height:100dvh;overflow:hidden;display:flex;flex-direction:column;}
   ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-track{background:transparent} ::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px} ::-webkit-scrollbar-thumb:hover{background:var(--orange)}
-  .screen{display:none;width:100%;height:100vh;overflow:hidden;} .screen.active{display:flex;}
+  .screen{display:none;width:100%;height:100vh;height:100dvh;} .screen.active{display:flex;}
 
   /* Welcome */
   #screen-welcome{flex-direction:column;align-items:center;justify-content:center;gap:40px;position:relative;overflow:hidden;}
@@ -71,10 +100,10 @@
   .divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--border);}
 
   /* App */
-  #screen-app{flex-direction:row;height:100vh;overflow:hidden;}
+  #screen-app{flex-direction:row;height:100vh;height:100dvh;overflow:hidden;}
   /* app-inner — на десктопе просто flex-контейнер, растянутый на весь экран */
-  .app-inner{display:flex;flex-direction:row;flex:1;min-width:0;height:100vh;overflow:hidden;}
-  .sidebar{width:280px;min-width:280px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;height:100vh;}
+  .app-inner{display:flex;flex-direction:row;flex:1;min-width:0;height:100vh;height:100dvh;overflow:hidden;}
+  .sidebar{width:280px;min-width:280px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;height:100vh;height:100dvh;}
   .sidebar-header{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px;}
   .sidebar-logo{font-family:var(--mono);font-size:16px;font-weight:700;letter-spacing:-1px;}
   .sidebar-logo span{color:var(--orange);}
@@ -123,7 +152,7 @@
   .empty-chats span{color:var(--orange);}
 
   /* Chat area */
-  .chat-area{flex:1;display:flex;flex-direction:column;height:100vh;background:var(--bg);}
+  .chat-area{flex:1;display:flex;flex-direction:column;height:100vh;height:100dvh;background:var(--bg);}
   .chat-placeholder{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:var(--text-muted);}
   .chat-placeholder-icon{font-size:48px;opacity:0.3;}
   .chat-placeholder p{font-family:var(--mono);font-size:12px;letter-spacing:2px;text-transform:uppercase;}
@@ -231,33 +260,34 @@
      на мобиле каждый = 100vw. Переключение через translateX.
   ═══════════════════════════════════════════════════ */
   @media (max-width: 640px) {
-    /* Корень приложения — горизонтальный слайдер */
+    /* Корень приложения — занимает весь экран */
     #screen-app {
       position: relative;
+      height: 100dvh;
+      overflow: hidden;
     }
 
-    /* Обёртка сайдбара + чата — лента шириной 200vw */
+    /* Обёртка — лента 200vw, высота от родителя */
     .app-inner {
       display: flex;
       flex-direction: row;
       width: 200vw;
-      height: 100vh;
+      height: 100%;        /* берёт высоту от #screen-app */
       transition: transform 0.28s cubic-bezier(0.4,0,0.2,1);
     }
-    /* Когда открыт чат — сдвигаем на -100vw */
     #screen-app.chat-open .app-inner { transform: translateX(-100vw); }
 
     .sidebar {
       width: 100vw;
       min-width: 100vw;
-      height: 100vh;
+      height: 100%;        /* берёт высоту от app-inner */
       border-right: none;
     }
 
     .chat-area {
       width: 100vw;
       min-width: 100vw;
-      height: 100vh;
+      height: 100%;        /* берёт высоту от app-inner */
     }
 
     /* Кнопка «назад» — видна только на мобиле */
@@ -295,6 +325,9 @@
 
     /* Убираем отступы у badges */
     .enc-badge { padding: 5px 12px; font-size: 9px; }
+
+    /* messages-area должна сжиматься в flex-контейнере */
+    .messages-area { min-height: 0; overflow-y: auto; }
 
     /* Настройки — прокручиваемый модал */
     .modal-overlay { align-items: flex-end; }
