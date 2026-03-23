@@ -821,22 +821,28 @@ body {
   .app-inner {
     display: flex;
     flex-direction: row;
-    width: 200vw;
+    width: 100%;
+    min-width: 100%;
     height: 100%;
-    transition: transform 0.28s cubic-bezier(0.4,0,0.2,1);
   }
-  #screen-app.chat-open .app-inner { transform: translateX(-100vw); }
   .sidebar {
-    width: 100vw;
-    min-width: 100vw;
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
     height: 100%;
     border-right: none;
   }
   .chat-area {
-    width: 100vw;
-    min-width: 100vw;
+    flex: 1 1 100%;
+    display: none;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
     height: 100%;
   }
+  #screen-app.chat-open .sidebar { display: none; }
+  #screen-app.chat-open .chat-area { display: flex; }
   .back-btn { display: flex !important; }
   .icon-btn  { width: 44px; height: 44px; font-size: 18px; }
   .send-btn  { width: 48px; height: 48px; font-size: 18px; }
@@ -1552,10 +1558,7 @@ async function openChat(code) {
   document.getElementById('chat-header').classList.add('visible');
   document.getElementById('enc-badge').classList.add('visible');
   document.getElementById('input-row').classList.add('visible');
-  // Slide to chat panel only when mobile layout is active (≤640px)
-  if (isMobileLayout()) {
-    document.getElementById('screen-app').classList.add('chat-open');
-  }
+  syncAppLayout();
 
   const msgArea = document.getElementById('messages-area');
   msgArea.innerHTML = '';
@@ -1591,8 +1594,18 @@ async function openChat(code) {
 }
 
 function closeChat() {
-  document.getElementById('screen-app').classList.remove('chat-open');
   activeChat = null;
+  syncAppLayout();
+}
+
+function syncAppLayout() {
+  const appScreen = document.getElementById('screen-app');
+  if (!appScreen) return;
+  if (window.innerWidth <= 640 && activeChat) {
+    appScreen.classList.add('chat-open');
+  } else {
+    appScreen.classList.remove('chat-open');
+  }
 }
 
 function updateChatHeader(code) {
@@ -2100,10 +2113,6 @@ document.addEventListener('webkitfullscreenchange', () => {
   }
 });
 
-function isMobileLayout() {
-  // Синхронизировано с CSS @media (max-width: 640px)
-  return window.innerWidth <= 640;
-}
 function isMobile() {
   // Только для fullscreen — реальные touch-устройства
   return ('ontouchstart' in window || navigator.maxTouchPoints > 1)
@@ -2132,12 +2141,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('settings-name-input').addEventListener('keydown', e => { if (e.key==='Enter') saveSettings(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
 
-  // При ресайзе: синхронизировать chat-open с текущей шириной окна
-  window.addEventListener('resize', () => {
-    if (!isMobileLayout()) {
-      document.getElementById('screen-app').classList.remove('chat-open');
-    }
-  });
+  window.addEventListener('resize', syncAppLayout);
 
   // Try to resume session from localStorage
   const token = LS.load('nxmsg_token');
