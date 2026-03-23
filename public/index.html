@@ -57,12 +57,12 @@
   body.light .btn-ghost:hover        { border-color: var(--orange); color: var(--orange); }
   body.light .msg.mine .file-dl      { color: #ffffff; }
   *{margin:0;padding:0;box-sizing:border-box;}
-  body{background:var(--bg);color:var(--text);font-family:var(--sans);height:100vh;height:100dvh;overflow:hidden;display:flex;flex-direction:column;}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);width:100%;height:100%;position:fixed;inset:0;overflow:hidden;display:flex;flex-direction:column;}
   ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-track{background:transparent} ::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px} ::-webkit-scrollbar-thumb:hover{background:var(--orange)}
-  .screen{display:none;width:100%;height:100vh;height:100dvh;} .screen.active{display:flex;}
+  .screen{display:none;position:absolute;inset:0;} .screen.active{display:flex;}
 
   /* Welcome */
-  #screen-welcome{flex-direction:column;align-items:center;justify-content:center;gap:40px;position:relative;overflow:hidden;}
+  #screen-welcome{flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;gap:40px;position:relative;overflow:hidden;}
   #screen-welcome::before{content:'';position:absolute;width:600px;height:600px;background:radial-gradient(circle,rgba(255,92,0,0.06) 0%,transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;}
   .logo-block{text-align:center;position:relative;z-index:1;}
   .logo-mark{font-family:var(--mono);font-size:48px;font-weight:700;letter-spacing:-2px;}
@@ -100,9 +100,9 @@
   .divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--border);}
 
   /* App */
-  #screen-app{flex-direction:row;overflow:hidden;flex:1;}
-  .app-inner{display:flex;flex-direction:row;flex:1;min-width:0;overflow:hidden;}
-  .sidebar{width:280px;min-width:280px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;}
+  #screen-app{flex-direction:row;overflow:hidden;}
+  .app-inner{display:flex;flex-direction:row;width:100%;height:100%;overflow:hidden;}
+  .sidebar{width:280px;min-width:280px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;height:100%;}
   .sidebar-header{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px;}
   .sidebar-logo{font-family:var(--mono);font-size:16px;font-weight:700;letter-spacing:-1px;}
   .sidebar-logo span{color:var(--orange);}
@@ -151,7 +151,7 @@
   .empty-chats span{color:var(--orange);}
 
   /* Chat area */
-  .chat-area{flex:1;display:flex;flex-direction:column;background:var(--bg);overflow:hidden;}
+  .chat-area{flex:1;display:flex;flex-direction:column;background:var(--bg);overflow:hidden;height:100%;min-width:0;}
   .chat-placeholder{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:var(--text-muted);}
   .chat-placeholder-icon{font-size:48px;opacity:0.3;}
   .chat-placeholder p{font-family:var(--mono);font-size:12px;letter-spacing:2px;text-transform:uppercase;}
@@ -266,8 +266,6 @@
     }
 
     .app-inner {
-      display: flex;
-      flex-direction: row;
       width: 200vw;
       height: 100%;
       transition: transform 0.28s cubic-bezier(0.4,0,0.2,1);
@@ -277,14 +275,11 @@
     .sidebar {
       width: 100vw;
       min-width: 100vw;
-      height: 100%;        /* берёт высоту от app-inner */
       border-right: none;
     }
-
     .chat-area {
       width: 100vw;
       min-width: 100vw;
-      height: 100%;        /* берёт высоту от app-inner */
     }
 
     /* Кнопка «назад» — видна только на мобиле */
