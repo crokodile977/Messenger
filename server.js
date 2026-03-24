@@ -10,7 +10,7 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-app.use(express.json());
+app.use(express.json({ limit: '35mb' }));
 
 // PWA icons (generated SVG rendered as PNG via browser)
 // We serve SVG with correct MIME so browsers accept it as icon
@@ -63,7 +63,7 @@ const pool = process.env.DATABASE_URL ? new Pool({
 // In-memory cache (populated from DB on startup, kept in sync on writes)
 // users    : userId  -> { id, passwordHash, displayName, bio, avatar, registeredAt, publicCode }
 // pubcodes : publicCode -> userId
-// messages : convKey -> [{ id, from, to, encrypted, timestamp }]
+// messages : convKey -> [{ id, from, to, encrypted, timestamp, kind, fileName, fileSize, fileType, fileData }]
 const users    = new Map();
 const pubcodes = new Map();
 const messages = new Map();
@@ -89,8 +89,18 @@ async function initDB() {
       from_id   TEXT NOT NULL,
       to_id     TEXT NOT NULL,
       encrypted TEXT NOT NULL,
-      ts        BIGINT NOT NULL
+      ts        BIGINT NOT NULL,
+      kind      TEXT NOT NULL DEFAULT 'text',
+      file_name TEXT,
+      file_size BIGINT,
+      file_type TEXT,
+      file_data TEXT
     );
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'text';
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_name TEXT;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_size BIGINT;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_type TEXT;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_data TEXT;
     CREATE INDEX IF NOT EXISTS messages_conv_key ON messages(conv_key, ts);
   `);
 }
@@ -106,11 +116,26 @@ async function loadFromDB() {
     users.set(r.id, u);
     pubcodes.set(r.public_code, r.id);
   }
-  const { rows: mRows } = await pool.query('SELECT * FROM messages ORDER BY ts ASC');
+  const { rows: mRows } = await pool.query(`
+    SELECT id, conv_key, from_id, to_id, encrypted, ts, kind, file_name, file_size, file_type, file_data
+    FROM messages
+    ORDER BY ts ASC
+  `);
   for (const r of mRows) {
     const key = r.conv_key;
     if (!messages.has(key)) messages.set(key, []);
-    messages.get(key).push({ id: r.id, from: r.from_id, to: r.to_id, encrypted: r.encrypted, timestamp: Number(r.ts) });
+    messages.get(key).push({
+      id: r.id,
+      from: r.from_id,
+      to: r.to_id,
+      encrypted: r.encrypted,
+      timestamp: Number(r.ts),
+      kind: r.kind || 'text',
+      fileName: r.file_name || '',
+      fileSize: Number(r.file_size || 0),
+      fileType: r.file_type || '',
+      fileData: r.file_data || ''
+    });
   }
   console.log(`✅ Loaded ${users.size} users, ${messages.size} conversations from DB`);
 }
@@ -152,9 +177,21 @@ async function saveMessage(convKey, msgObj) {
   if (!pool) return;
   try {
     await pool.query(`
-      INSERT INTO messages (id, conv_key, from_id, to_id, encrypted, ts)
-      VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING
-    `, [msgObj.id, convKey, msgObj.from, msgObj.to, msgObj.encrypted, msgObj.timestamp]);
+      INSERT INTO messages (id, conv_key, from_id, to_id, encrypted, ts, kind, file_name, file_size, file_type, file_data)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING
+    `, [
+      msgObj.id,
+      convKey,
+      msgObj.from,
+      msgObj.to,
+      msgObj.encrypted,
+      msgObj.timestamp,
+      msgObj.kind || 'text',
+      msgObj.fileName || null,
+      msgObj.fileSize || 0,
+      msgObj.fileType || null,
+      msgObj.fileData || null
+    ]);
   } catch (e) { console.error('saveMessage DB error:', e.message); }
 }
 
@@ -221,6 +258,46 @@ function sanitizeText(input) {
     .slice(0, 4000);
 }
 
+function sanitizeDisplayName(input) {
+  if (typeof input !== 'string') return '';
+  return input.replace(/[<>&"'`\/=]/g, '').trim().slice(0, 32);
+}
+
+function sanitizeBio(input, fallback = '') {
+  if (typeof input !== 'string') return fallback;
+  return input.replace(/[<>&"'`\/=]/g, '').trim().slice(0, 80);
+}
+
+function buildFilePreview(fileName) {
+  return `📎 ${fileName || 'Файл'}`;
+}
+
+function serializeMessageForClient(message, viewerUserId, secret) {
+  const text = decryptMessage(message.encrypted, secret) || (message.kind === 'file' ? buildFilePreview(message.fileName) : '[decryption failed]');
+  return {
+    id: message.id,
+    mine: message.from === viewerUserId,
+    text,
+    timestamp: message.timestamp,
+    fileData: message.fileData || '',
+    fileName: message.fileName || '',
+    fileSize: message.fileSize || 0,
+    fileType: message.fileType || ''
+  };
+}
+
+function buildChatStartedPayload(senderUser) {
+  return {
+    type: 'chat_started',
+    fromCode: senderUser.publicCode,
+    fromName: senderUser.displayName || '',
+    publicCode: senderUser.publicCode,
+    displayName: senderUser.displayName || '',
+    bio: senderUser.bio || '',
+    online: true
+  };
+}
+
 function isValidUserId(id) {
   if (typeof id !== 'string' || id.length < 18 || id.length > 24) return false;
   return /^[A-Za-z0-9!@#$%^&*\-_+=~]+$/.test(id);
@@ -267,9 +344,7 @@ app.post('/api/register', async (req, res) => {
   let publicCode;
   do { publicCode = generatePublicCode(); } while (pubcodes.has(publicCode));
 
-  const safeName = typeof displayName === 'string'
-    ? displayName.replace(/[<>&"'`\/=]/g, '').trim().slice(0, 32)
-    : '';
+  const safeName = sanitizeDisplayName(displayName);
 
   await saveUser({ id: userId, passwordHash, displayName: safeName, bio: '', avatar: null, registeredAt: Date.now(), publicCode });
 
@@ -297,7 +372,7 @@ app.post('/api/login', async (req, res) => {
   const userId = pubcodes.get(publicCode);
   if (!userId || !users.has(userId)) {
     // Constant-time response to prevent user enumeration
-    await bcrypt.compare('dummy', '$2b$12$invalidhashpaddingtostoptimingatk');
+    await bcrypt.compare('dummy-password', '$2a$12$C6UzMDM.H6dfI/f/IKcEeOeW8b7mBfCJoM/gA1r5MMEZe7qVD/3G.');
     return res.status(401).json({ error: 'Неверный код или пароль' });
   }
 
@@ -319,7 +394,7 @@ app.post('/api/session', (req, res) => {
   const userId = resolveSession(token);
   if (!userId || !users.has(userId)) return res.json({ valid: false });
   const u = users.get(userId);
-  res.json({ valid: true, displayName: u.displayName || '', bio: u.bio || '', publicCode: u.publicCode });
+  res.json({ valid: true, token, displayName: u.displayName || '', bio: u.bio || '', publicCode: u.publicCode });
 });
 
 // Lookup user by public code (for starting a chat) — returns exists + displayName only
@@ -336,11 +411,10 @@ app.get('/api/user/bycode/:code', (req, res) => {
 app.patch('/api/user/name', async (req, res) => {
   const userId = resolveSession(req.body.token);
   if (!userId || !users.has(userId)) return res.status(401).json({ error: 'Unauthorized' });
-  const { name } = req.body;
-  if (typeof name !== 'string') return res.status(400).json({ error: 'Invalid name' });
-  const safeName = name.replace(/[<>&"'`\/=]/g, '').trim().slice(0, 32);
-  const { bio } = req.body;
-  const safeBio = typeof bio === 'string' ? bio.replace(/[<>&"']/g, '').trim().slice(0, 80) : users.get(userId).bio || '';
+  const requestedName = typeof req.body.displayName === 'string' ? req.body.displayName : req.body.name;
+  if (typeof requestedName !== 'string') return res.status(400).json({ error: 'Invalid name' });
+  const safeName = sanitizeDisplayName(requestedName);
+  const safeBio = sanitizeBio(req.body.bio, users.get(userId).bio || '');
   const updatedUser = { ...users.get(userId), displayName: safeName, bio: safeBio };
   await saveUser(updatedUser);
   // Broadcast name change
@@ -414,7 +488,11 @@ app.post('/api/contacts', (req, res) => {
     const cu = users.get(contactId);
     const lastMsg = msgs.length ? msgs[msgs.length - 1] : null;
     const secret = getConversationSecret(userId, contactId);
-    const lastText = lastMsg ? (decryptMessage(lastMsg.encrypted, secret) || '') : '';
+    const lastText = !lastMsg
+      ? ''
+      : lastMsg.kind === 'file'
+        ? buildFilePreview(lastMsg.fileName)
+        : (decryptMessage(lastMsg.encrypted, secret) || '');
     contacts.push({
       publicCode: cu.publicCode,
       displayName: cu.displayName || '',
@@ -443,12 +521,7 @@ app.post('/api/messages', (req, res) => {
   const key = getConvKey(userId, contactId);
   const secret = getConversationSecret(userId, contactId);
   const raw = messages.get(key) || [];
-  const decrypted = raw.map(m => ({
-    id: m.id,
-    mine: m.from === userId,
-    text: decryptMessage(m.encrypted, secret) || '[decryption failed]',
-    timestamp: m.timestamp
-  }));
+  const decrypted = raw.map(m => serializeMessageForClient(m, userId, secret));
   res.json(decrypted);
 });
 
@@ -489,7 +562,18 @@ wss.on('connection', (ws) => {
         const secret = getConversationSecret(userId, toId);
         const encrypted = encryptMessage(safeText, secret);
 
-        const msgObj = { id: crypto.randomUUID(), from: userId, to: toId, encrypted, timestamp: Date.now() };
+        const msgObj = {
+          id: crypto.randomUUID(),
+          from: userId,
+          to: toId,
+          encrypted,
+          timestamp: Date.now(),
+          kind: 'text',
+          fileName: '',
+          fileSize: 0,
+          fileType: '',
+          fileData: ''
+        };
         const convKey = getConvKey(userId, toId);
         const isFirst = !messages.has(convKey) || !messages.get(convKey).length;
         await saveMessage(convKey, msgObj);
@@ -498,12 +582,7 @@ wss.on('connection', (ws) => {
         const recipientWs = wsClients.get(toId);
 
         if (isFirst && recipientWs?.readyState === WebSocket.OPEN) {
-          recipientWs.send(JSON.stringify({
-            type: 'chat_started',
-            fromCode: senderUser.publicCode,
-            fromName: senderUser.displayName || '',
-            online: true
-          }));
+          recipientWs.send(JSON.stringify(buildChatStartedPayload(senderUser)));
         }
 
         if (recipientWs?.readyState === WebSocket.OPEN) {
@@ -538,7 +617,7 @@ wss.on('connection', (ws) => {
         const rws = wsClients.get(toId);
         if (rws?.readyState === WebSocket.OPEN) {
           const su = users.get(userId);
-          rws.send(JSON.stringify({ type: 'chat_started', fromCode: su.publicCode, fromName: su.displayName || '', online: true }));
+          rws.send(JSON.stringify(buildChatStartedPayload(su)));
         }
         break;
       }
@@ -558,11 +637,54 @@ wss.on('connection', (ws) => {
         const fileSender = users.get(userId);
         const fileId = crypto.randomUUID();
         const ts = Date.now();
+        const secret = getConversationSecret(userId, toId);
+        const encrypted = encryptMessage(buildFilePreview(safeName), secret);
+        const msgObj = {
+          id: fileId,
+          from: userId,
+          to: toId,
+          encrypted,
+          timestamp: ts,
+          kind: 'file',
+          fileName: safeName,
+          fileSize: safeSize,
+          fileType: safeType,
+          fileData: data
+        };
+        const convKey = getConvKey(userId, toId);
+        const isFirst = !messages.has(convKey) || !messages.get(convKey).length;
+        await saveMessage(convKey, msgObj);
         const recipientWs = wsClients.get(toId);
-        if (recipientWs?.readyState === WebSocket.OPEN) {
-          recipientWs.send(JSON.stringify({ type:'new_file', id:fileId, from:fileSender.publicCode, fromName:fileSender.displayName||'', fileName:safeName, fileSize:safeSize, fileType:safeType, data, timestamp:ts }));
+        if (isFirst && recipientWs?.readyState === WebSocket.OPEN) {
+          recipientWs.send(JSON.stringify(buildChatStartedPayload(fileSender)));
         }
-        ws.send(JSON.stringify({ type:'file_sent', id:fileId, to:toCode, fileName:safeName, fileSize:safeSize, fileType:safeType, data, timestamp:ts }));
+        if (recipientWs?.readyState === WebSocket.OPEN) {
+          recipientWs.send(JSON.stringify({
+            type:'new_file',
+            id:fileId,
+            from:fileSender.publicCode,
+            fromName:fileSender.displayName||'',
+            publicCode:fileSender.publicCode,
+            displayName:fileSender.displayName||'',
+            fileName:safeName,
+            fileSize:safeSize,
+            fileType:safeType,
+            fileData:data,
+            data,
+            timestamp:ts
+          }));
+        }
+        ws.send(JSON.stringify({
+          type:'file_sent',
+          id:fileId,
+          to:toCode,
+          fileName:safeName,
+          fileSize:safeSize,
+          fileType:safeType,
+          fileData:data,
+          data,
+          timestamp:ts
+        }));
         break;
       }
 
