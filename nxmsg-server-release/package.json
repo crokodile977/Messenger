@@ -1,0 +1,22 @@
+{
+  "name": "nxmsg-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NXMSG backend for web and native Android clients",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.21.2",
+    "firebase-admin": "^13.0.2",
+    "pg": "^8.13.3",
+    "ws": "^8.18.0"
+  }
+}
